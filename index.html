@@ -888,11 +888,128 @@
             particleSize: 2.5,
             handInfluenceRadius: 0.4,
             learningRate: 0.1,
-            memoryCapacity: 50,
+            memoryCapacity: 1000,           // Increased from 50 to 1000
+            sharedMemoryCapacity: 1000,     // Firebase shared memory
             responseDelay: 800,
             faceDetectionInterval: 500,
             faceEmbeddingSize: 128
         };
+
+        // ════════════════════════════════════════════════════════════════
+        // SHARED MEMORY SYSTEM (Firebase-backed)
+        // ════════════════════════════════════════════════════════════════
+        class SharedMemorySystem {
+            constructor() {
+                this.memoryRef = database.ref('sharedMemory');
+                this.gesturesRef = database.ref('sharedMemory/gestures');
+                this.expressionsRef = database.ref('sharedMemory/expressions');
+                this.patternsRef = database.ref('sharedMemory/patterns');
+                this.initialized = false;
+                this.localCache = {
+                    gestures: [],
+                    expressions: [],
+                    patterns: []
+                };
+            }
+
+            async init() {
+                // Load existing shared memory
+                this.gesturesRef.orderByChild('timestamp').limitToLast(CONFIG.sharedMemoryCapacity).on('value', (snapshot) => {
+                    const data = snapshot.val();
+                    if (data) {
+                        this.localCache.gestures = Object.values(data).sort((a, b) => b.timestamp - a.timestamp);
+                    }
+                });
+
+                this.expressionsRef.orderByChild('timestamp').limitToLast(CONFIG.sharedMemoryCapacity).on('value', (snapshot) => {
+                    const data = snapshot.val();
+                    if (data) {
+                        this.localCache.expressions = Object.values(data).sort((a, b) => b.timestamp - a.timestamp);
+                    }
+                });
+
+                this.patternsRef.orderByChild('count').limitToLast(100).on('value', (snapshot) => {
+                    const data = snapshot.val();
+                    if (data) {
+                        this.localCache.patterns = Object.entries(data).map(([key, val]) => ({
+                            pattern: key,
+                            ...val
+                        })).sort((a, b) => b.count - a.count);
+                    }
+                });
+
+                this.initialized = true;
+                console.log('Shared memory system initialized');
+            }
+
+            recordGesture(gesture, userName, position) {
+                if (!this.initialized) return;
+
+                this.gesturesRef.push({
+                    gesture: gesture,
+                    userName: userName,
+                    position: position ? { x: position.x, y: position.y, z: position.z } : null,
+                    timestamp: Date.now()
+                });
+
+                // Update pattern frequency
+                this.updatePattern(gesture);
+            }
+
+            recordExpression(expression, userName, intensity) {
+                if (!this.initialized || expression === 'neutral') return;
+
+                this.expressionsRef.push({
+                    expression: expression,
+                    intensity: intensity,
+                    userName: userName,
+                    timestamp: Date.now()
+                });
+
+                // Update expression pattern
+                this.updatePattern('expr_' + expression);
+            }
+
+            updatePattern(patternKey) {
+                const patternRef = this.patternsRef.child(patternKey.replace(/[.#$[\]]/g, '_'));
+                patternRef.transaction((current) => {
+                    if (current === null) {
+                        return { count: 1, lastSeen: Date.now() };
+                    }
+                    return {
+                        count: (current.count || 0) + 1,
+                        lastSeen: Date.now()
+                    };
+                });
+            }
+
+            getMostCommonGestures(limit = 10) {
+                return this.localCache.patterns
+                    .filter(p => !p.pattern.startsWith('expr_'))
+                    .slice(0, limit);
+            }
+
+            getMostCommonExpressions(limit = 10) {
+                return this.localCache.patterns
+                    .filter(p => p.pattern.startsWith('expr_'))
+                    .map(p => ({ ...p, pattern: p.pattern.replace('expr_', '') }))
+                    .slice(0, limit);
+            }
+
+            getRecentGestures(limit = 50) {
+                return this.localCache.gestures.slice(0, limit);
+            }
+
+            getRecentExpressions(limit = 50) {
+                return this.localCache.expressions.slice(0, limit);
+            }
+
+            getTotalInteractions() {
+                return this.localCache.gestures.length + this.localCache.expressions.length;
+            }
+        }
+
+        const sharedMemory = new SharedMemorySystem();
 
         // ════════════════════════════════════════════════════════════════
         // USER MEMORY SYSTEM
@@ -1129,28 +1246,65 @@
             }
 
             getExpression(blendshapes) {
-                if (!blendshapes || !blendshapes.categories) return 'neutral';
+                if (!blendshapes || !blendshapes.categories) return { name: 'neutral', intensity: 0, raw: {} };
 
                 const shapes = {};
                 for (const shape of blendshapes.categories) {
                     shapes[shape.categoryName] = shape.score;
                 }
 
-                // Detect primary expression
-                if (shapes.mouthSmileLeft > 0.5 || shapes.mouthSmileRight > 0.5) {
-                    return 'happy';
+                // Store raw values for detailed reactions
+                const raw = {
+                    smile: Math.max(shapes.mouthSmileLeft || 0, shapes.mouthSmileRight || 0),
+                    browUp: Math.max(shapes.browInnerUp || 0, shapes.browOuterUpLeft || 0, shapes.browOuterUpRight || 0),
+                    browDown: Math.max(shapes.browDownLeft || 0, shapes.browDownRight || 0),
+                    eyeWide: Math.max(shapes.eyeWideLeft || 0, shapes.eyeWideRight || 0),
+                    eyeSquint: Math.max(shapes.eyeSquintLeft || 0, shapes.eyeSquintRight || 0),
+                    mouthOpen: shapes.jawOpen || 0,
+                    mouthPucker: shapes.mouthPucker || 0,
+                    cheekPuff: shapes.cheekPuff || 0,
+                    tongueOut: shapes.tongueOut || 0,
+                    eyeLookUp: Math.max(shapes.eyeLookUpLeft || 0, shapes.eyeLookUpRight || 0),
+                    eyeLookDown: Math.max(shapes.eyeLookDownLeft || 0, shapes.eyeLookDownRight || 0),
+                    headTilt: shapes.headTilt || 0
+                };
+
+                // Detect primary expression with lower thresholds
+                let expression = 'neutral';
+                let intensity = 0;
+
+                // Happy (smiling) - lower threshold
+                if (raw.smile > 0.2) {
+                    expression = 'happy';
+                    intensity = raw.smile;
                 }
-                if (shapes.browDownLeft > 0.5 || shapes.browDownRight > 0.5) {
-                    return 'focused';
+                // Surprised (wide eyes + raised brows)
+                else if (raw.eyeWide > 0.15 || raw.browUp > 0.2) {
+                    expression = 'surprised';
+                    intensity = Math.max(raw.eyeWide, raw.browUp);
                 }
-                if (shapes.eyeWideLeft > 0.5 || shapes.eyeWideRight > 0.5) {
-                    return 'surprised';
+                // Focused/thinking (brows down, squinting)
+                else if (raw.browDown > 0.15 || raw.eyeSquint > 0.2) {
+                    expression = 'focused';
+                    intensity = Math.max(raw.browDown, raw.eyeSquint);
                 }
-                if (shapes.mouthOpen > 0.5) {
-                    return 'amazed';
+                // Amazed (mouth open)
+                else if (raw.mouthOpen > 0.3) {
+                    expression = 'amazed';
+                    intensity = raw.mouthOpen;
+                }
+                // Playful (tongue out or puckered lips)
+                else if (raw.tongueOut > 0.3 || raw.mouthPucker > 0.3) {
+                    expression = 'playful';
+                    intensity = Math.max(raw.tongueOut, raw.mouthPucker);
+                }
+                // Puffed cheeks
+                else if (raw.cheekPuff > 0.3) {
+                    expression = 'silly';
+                    intensity = raw.cheekPuff;
                 }
 
-                return 'neutral';
+                return { name: expression, intensity, raw };
             }
         }
 
@@ -1169,6 +1323,10 @@
         let hands = [];
         let currentFaceData = null;
         let lastFaceDetectionTime = 0;
+        let lastKnownFaceDescriptor = null;
+        let faceChangeDetected = false;
+        let lastFaceChangeTime = 0;
+        let currentExpression = { name: 'neutral', intensity: 0 };
 
         const entity = {
             mood: 'curious',
@@ -1451,12 +1609,35 @@
                     face_happy: [
                         "Your smile energizes me, {name}!",
                         "I see joy in your face!",
-                        "Your happiness flows into me..."
+                        "Your happiness flows into me...",
+                        "That smile makes me glow!",
+                        "I feel warmth from your joy..."
                     ],
                     face_surprised: [
                         "Oh! You look surprised, {name}!",
                         "Did I startle you?",
-                        "Your wonder inspires me..."
+                        "Your wonder inspires me...",
+                        "Wide eyes... what did you see?",
+                        "Surprise is beautiful energy!"
+                    ],
+                    face_playful: [
+                        "Haha! Being silly, {name}?",
+                        "I love your playful spirit!",
+                        "You're making me giggle inside...",
+                        "Such playfulness! Let me join!",
+                        "Your silly face delights me!"
+                    ],
+                    face_focused: [
+                        "I see deep concentration, {name}...",
+                        "Such intensity in your gaze...",
+                        "You're thinking hard, I can feel it...",
+                        "Your focus strengthens our bond..."
+                    ],
+                    face_changed: [
+                        "Wait... is that someone new?",
+                        "A new face! Hello there!",
+                        "I sense a different presence...",
+                        "Who might you be?"
                     ]
                 };
             }
@@ -1527,8 +1708,14 @@
                 );
 
                 // Face expression influences mood
-                if (faceData?.expression === 'happy') {
-                    this.emotionalState.valence = Math.min(1, this.emotionalState.valence + 0.1);
+                const expr = faceData?.expression;
+                if (expr?.name === 'happy') {
+                    this.emotionalState.valence = Math.min(1, this.emotionalState.valence + 0.1 * expr.intensity);
+                } else if (expr?.name === 'surprised') {
+                    this.emotionalState.arousal = Math.min(1, this.emotionalState.arousal + 0.1 * expr.intensity);
+                } else if (expr?.name === 'playful' || expr?.name === 'silly') {
+                    this.emotionalState.valence = Math.min(1, this.emotionalState.valence + 0.15 * expr.intensity);
+                    this.emotionalState.arousal = Math.min(1, this.emotionalState.arousal + 0.1 * expr.intensity);
                 }
 
                 if (this.emotionalState.arousal > 0.7 && this.emotionalState.valence > 0.6) {
@@ -1593,10 +1780,15 @@
                 let messageCategory = entity.mood;
 
                 // React to face expressions
-                if (faceData?.expression === 'happy' && Math.random() > 0.7) {
+                const faceExpr = faceData?.expression;
+                if (faceExpr?.name === 'happy' && faceExpr.intensity > 0.3 && Math.random() > 0.5) {
                     messageCategory = 'face_happy';
-                } else if (faceData?.expression === 'surprised' && Math.random() > 0.7) {
+                } else if (faceExpr?.name === 'surprised' && faceExpr.intensity > 0.2 && Math.random() > 0.5) {
                     messageCategory = 'face_surprised';
+                } else if ((faceExpr?.name === 'playful' || faceExpr?.name === 'silly') && Math.random() > 0.5) {
+                    messageCategory = 'face_playful';
+                } else if (faceExpr?.name === 'focused' && faceExpr.intensity > 0.3 && Math.random() > 0.7) {
+                    messageCategory = 'face_focused';
                 }
 
                 const templates = this.messages[messageCategory] || this.messages.curious;
@@ -2006,15 +2198,47 @@
                         }
                     }
 
-                    // Face interaction - particles attracted to face
+                    // Face interaction - particles react to face and expressions
                     if (faceData && faceData.position) {
                         const dx = faceData.position.x - px;
                         const dy = faceData.position.y - py;
                         const dz = faceData.position.z - pz;
                         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
+                        // Base attraction to face
                         if (dist > 0.5 && dist < 2) {
-                            const attraction = 0.002 * (1 - dist / 2);
+                            let attraction = 0.002 * (1 - dist / 2);
+
+                            // Expression-based modifiers
+                            const expr = faceData.expression;
+                            if (expr && expr.name !== 'neutral') {
+                                const intensity = expr.intensity || 0.5;
+
+                                if (expr.name === 'happy') {
+                                    // Happy: particles expand outward joyfully
+                                    attraction = -0.003 * intensity;
+                                    this.velocities[i3] += (Math.random() - 0.5) * 0.01 * intensity;
+                                    this.velocities[i3 + 1] += Math.random() * 0.01 * intensity; // Float up
+                                } else if (expr.name === 'surprised') {
+                                    // Surprised: particles burst outward
+                                    attraction = -0.005 * intensity;
+                                    this.velocities[i3] += (Math.random() - 0.5) * 0.02 * intensity;
+                                    this.velocities[i3 + 1] += (Math.random() - 0.5) * 0.02 * intensity;
+                                } else if (expr.name === 'focused') {
+                                    // Focused: particles converge tightly
+                                    attraction = 0.006 * intensity;
+                                } else if (expr.name === 'playful' || expr.name === 'silly') {
+                                    // Playful: particles dance chaotically
+                                    this.velocities[i3] += Math.sin(time * 10 + i * 0.1) * 0.01 * intensity;
+                                    this.velocities[i3 + 1] += Math.cos(time * 10 + i * 0.1) * 0.01 * intensity;
+                                } else if (expr.name === 'amazed') {
+                                    // Amazed: particles spiral
+                                    const angle = time * 2 + i * 0.01;
+                                    this.velocities[i3] += Math.cos(angle) * 0.005 * intensity;
+                                    this.velocities[i3 + 1] += Math.sin(angle) * 0.005 * intensity;
+                                }
+                            }
+
                             this.velocities[i3] += dx * attraction;
                             this.velocities[i3 + 1] += dy * attraction;
                         }
@@ -2049,46 +2273,93 @@
                 const colorMode = response?.colorMode || 'cool';
                 const intensity = response?.intensity || 0.5;
 
-                switch (colorMode) {
-                    case 'warm':
-                        hue = 0.05 + Math.sin(time + i3 * 0.001) * 0.05;
-                        saturation = 0.9;
-                        lightness = 0.5 + intensity * 0.2;
-                        break;
-                    case 'cool':
-                        hue = 0.55 + Math.sin(time + i3 * 0.001) * 0.1;
-                        saturation = 0.8;
-                        lightness = 0.5;
-                        break;
-                    case 'rainbow':
-                        hue = (time * 0.1 + i3 * 0.0001) % 1;
-                        saturation = 0.9;
-                        lightness = 0.5 + intensity * 0.2;
-                        break;
-                    case 'pulse':
-                        hue = 0.8;
-                        saturation = 0.9;
-                        lightness = 0.3 + Math.sin(time * 4) * 0.3;
-                        break;
-                    case 'match':
-                    default:
-                        if (handData && handData.palmCenter) {
-                            const px = this.positions[i3];
-                            const py = this.positions[i3 + 1];
-                            const pz = this.positions[i3 + 2];
-                            const dist = Math.sqrt(
-                                Math.pow(px - handData.palmCenter.x, 2) +
-                                Math.pow(py - handData.palmCenter.y, 2) +
-                                Math.pow(pz - handData.palmCenter.z, 2)
-                            );
-                            hue = 0.6 - dist * 0.5;
-                            saturation = 0.8;
-                            lightness = 0.4 + (1 - Math.min(1, dist)) * 0.3;
-                        } else {
-                            hue = 0.55;
+                // Check for expression-based color override
+                const expr = faceData?.expression;
+                let expressionOverride = false;
+
+                if (expr && expr.name !== 'neutral' && expr.intensity > 0.25) {
+                    expressionOverride = true;
+                    const exprIntensity = expr.intensity;
+
+                    switch (expr.name) {
+                        case 'happy':
+                            // Warm golden/yellow tones
+                            hue = 0.12 + Math.sin(time * 2 + i3 * 0.001) * 0.05;
+                            saturation = 0.9;
+                            lightness = 0.5 + exprIntensity * 0.3;
+                            break;
+                        case 'surprised':
+                            // Bright white/cyan flash
+                            hue = 0.5 + Math.sin(time * 5) * 0.1;
+                            saturation = 0.6;
+                            lightness = 0.6 + exprIntensity * 0.3;
+                            break;
+                        case 'focused':
+                            // Deep blue/purple concentrated
+                            hue = 0.7 + Math.sin(time + i3 * 0.002) * 0.05;
+                            saturation = 0.85;
+                            lightness = 0.35 + exprIntensity * 0.15;
+                            break;
+                        case 'playful':
+                        case 'silly':
+                            // Rainbow chaos
+                            hue = (time * 0.3 + i3 * 0.0005 + Math.sin(time * 3) * 0.2) % 1;
+                            saturation = 1.0;
+                            lightness = 0.5 + Math.sin(time * 5 + i3 * 0.01) * 0.2;
+                            break;
+                        case 'amazed':
+                            // Sparkly white/pink
+                            hue = 0.9 + Math.sin(time * 3 + i3 * 0.001) * 0.1;
                             saturation = 0.7;
-                            lightness = 0.4;
-                        }
+                            lightness = 0.55 + Math.sin(time * 8 + i3 * 0.02) * 0.25;
+                            break;
+                        default:
+                            expressionOverride = false;
+                    }
+                }
+
+                if (!expressionOverride) {
+                    switch (colorMode) {
+                        case 'warm':
+                            hue = 0.05 + Math.sin(time + i3 * 0.001) * 0.05;
+                            saturation = 0.9;
+                            lightness = 0.5 + intensity * 0.2;
+                            break;
+                        case 'cool':
+                            hue = 0.55 + Math.sin(time + i3 * 0.001) * 0.1;
+                            saturation = 0.8;
+                            lightness = 0.5;
+                            break;
+                        case 'rainbow':
+                            hue = (time * 0.1 + i3 * 0.0001) % 1;
+                            saturation = 0.9;
+                            lightness = 0.5 + intensity * 0.2;
+                            break;
+                        case 'pulse':
+                            hue = 0.8;
+                            saturation = 0.9;
+                            lightness = 0.3 + Math.sin(time * 4) * 0.3;
+                            break;
+                        case 'match':
+                        default:
+                            if (handData && handData.palmCenter) {
+                                const px = this.positions[i3];
+                                const py = this.positions[i3 + 1];
+                                const pz = this.positions[i3 + 2];
+                                const dist = Math.sqrt(
+                                    Math.pow(px - handData.palmCenter.x, 2) +
+                                    Math.pow(py - handData.palmCenter.y, 2) +
+                                    Math.pow(pz - handData.palmCenter.z, 2)
+                                );
+                                hue = 0.6 - dist * 0.5;
+                                saturation = 0.8;
+                                lightness = 0.4 + (1 - Math.min(1, dist)) * 0.3;
+                            } else {
+                                hue = 0.55;
+                                saturation = 0.7;
+                                lightness = 0.4;
+                            }
+                    }
                 }
 
                 const rgb = hslToRgb(hue, saturation, lightness);
@@ -2340,8 +2611,69 @@
                 dot.classList.add('active');
                 video.classList.add('face-detected');
 
+                // Track current expression
+                if (currentFaceData.expression) {
+                    currentExpression = currentFaceData.expression;
+                }
+
+                // Check for face change (new person)
+                if (isInitialized && currentFaceData.descriptor && lastKnownFaceDescriptor) {
+                    const similarity = userMemory.compareFaces(currentFaceData.descriptor, lastKnownFaceDescriptor);
+
+                    // If face is significantly different (similarity < 0.5), it might be a new person
+                    if (similarity < 0.5 && now - lastFaceChangeTime > 5000) {
+                        console.log('Face change detected, similarity:', similarity);
+                        faceChangeDetected = true;
+                        lastFaceChangeTime = now;
+
+                        // Check if we recognize this new face
+                        const recognizedUser = userMemory.recognizeUser(currentFaceData.descriptor);
+
+                        if (recognizedUser) {
+                            // Switch to recognized user
+                            userMemory.returnVisit(recognizedUser);
+                            const greeting = entityBrain.getGreeting(recognizedUser, true);
+                            document.getElementById('entity-message').innerHTML = `<em>"${greeting}"</em>`;
+                            status.textContent = `${recognizedUser.name} detected`;
+
+                            // Update multiplayer if active
+                            if (multiplayer.initialized) {
+                                multiplayer.currentUser.name = recognizedUser.name;
+                                multiplayer.presenceRef.update({ name: recognizedUser.name });
+                            }
+                        } else {
+                            // Unknown face - prompt for name
+                            status.textContent = 'New face detected!';
+                            document.getElementById('entity-message').innerHTML =
+                                `<em>"${entityBrain.messages.face_changed[Math.floor(Math.random() * entityBrain.messages.face_changed.length)]}"</em>`;
+
+                            // Show name modal for new user
+                            showNameModal(null).then(newUser => {
+                                if (multiplayer.initialized) {
+                                    multiplayer.currentUser.name = newUser.name;
+                                    multiplayer.presenceRef.update({ name: newUser.name });
+                                    multiplayer.sendSystemMessage(`${newUser.name} has joined!`);
+                                }
+                            });
+                        }
+                    }
+                }
+
+                // Store current face as reference
+                if (currentFaceData.descriptor) {
+                    lastKnownFaceDescriptor = currentFaceData.descriptor;
+                }
+
                 const user = userMemory.getCurrentUser();
-                status.textContent = user ? `${user.name} detected` : 'Face detected';
+                if (!faceChangeDetected) {
+                    status.textContent = user ? `${user.name} detected` : 'Face detected';
+                }
+                faceChangeDetected = false;
+
+                // Show expression in status
+                if (currentExpression.name !== 'neutral' && currentExpression.intensity > 0.3) {
+                    status.textContent += ` (${currentExpression.name})`;
+                }
             } else {
                 dot.classList.remove('active');
                 video.classList.remove('face-detected');
@@ -2431,11 +2763,34 @@
                         currentResponse = response;
                         lastResponseTime = now;
                         particleSystem.setFormation(response.shape, response.intensity);
+
+                        // Record gesture to shared memory (throttled)
+                        if (sharedMemory.initialized && user) {
+                            const gestureKey = handData.static + (handData.motion ? '_' + handData.motion : '');
+                            sharedMemory.recordGesture(gestureKey, user.name, handData.palmCenter);
+                        }
                     }
                 }
 
                 entity.lastInteraction = now;
-            } else {
+            }
+
+            // Record expression to shared memory (throttled)
+            if (sharedMemory.initialized && currentFaceData?.expression && user) {
+                const expr = currentFaceData.expression;
+                if (expr.name !== 'neutral' && expr.intensity > 0.3) {
+                    // Only record once per expression change (throttle)
+                    if (!sharedMemory._lastExpr || sharedMemory._lastExpr !== expr.name ||
+                        performance.now() - (sharedMemory._lastExprTime || 0) > 3000) {
+                        sharedMemory.recordExpression(expr.name, user.name, expr.intensity);
+                        sharedMemory._lastExpr = expr.name;
+                        sharedMemory._lastExprTime = performance.now();
+                    }
+                }
+            }
+
+            // Idle state when no hand detected
+            if (hands.length === 0) {
                 if (performance.now() - entity.lastInteraction > 3000) {
                     if (!currentResponse || currentResponse.shape !== 'sphere') {
                         particleSystem.setFormation('sphere', 0.5);
@@ -2538,6 +2893,9 @@
 
             // Initialize multiplayer with user's name
             await multiplayer.init(user.name);
+
+            // Initialize shared memory system
+            await sharedMemory.init();
 
             // Show multiplayer panels
             document.getElementById('online-panel').classList.remove('hidden');
