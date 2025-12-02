@@ -1,0 +1,2127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECHO - Emergent Communication with Hand Organisms</title>
+    <meta name="description" content="An interactive 3D particle system that learns your gestures, recognizes faces, and communicates through visuals and spatial sound.">
+    <meta property="og:title" content="ECHO - Emergent Communication">
+    <meta property="og:description" content="Interactive AI that learns your hand gestures and responds with particles, shapes, and sound.">
+    <meta property="og:type" content="website">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            background: #000;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+        }
+
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        #video {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 180px;
+            height: 135px;
+            border-radius: 12px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            transform: scaleX(-1);
+            object-fit: cover;
+            z-index: 100;
+            opacity: 0.7;
+            transition: border-color 0.3s;
+        }
+
+        #video.face-detected {
+            border-color: rgba(80, 250, 123, 0.6);
+        }
+
+        #ui-panel {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 13px;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(15px);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+            max-width: 300px;
+        }
+
+        #ui-panel h2 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #8be9fd;
+            letter-spacing: 2px;
+        }
+
+        .entity-state {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .state-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #50fa7b;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.8); }
+        }
+
+        .user-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: linear-gradient(135deg, rgba(189, 147, 249, 0.2), rgba(255, 121, 198, 0.2));
+            border-radius: 8px;
+            border: 1px solid rgba(189, 147, 249, 0.3);
+        }
+
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #bd93f9, #ff79c6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .user-info {
+            flex: 1;
+        }
+
+        .user-name {
+            font-weight: 600;
+            color: #f8f8f2;
+        }
+
+        .user-visits {
+            font-size: 11px;
+            opacity: 0.7;
+        }
+
+        .memory-bar {
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+
+        .memory-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #bd93f9, #ff79c6);
+            border-radius: 2px;
+            transition: width 0.3s;
+        }
+
+        #gesture-display {
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #f1fa8c;
+        }
+
+        #entity-message {
+            margin-top: 15px;
+            padding: 12px;
+            background: rgba(139, 233, 253, 0.1);
+            border-radius: 8px;
+            border-left: 3px solid #8be9fd;
+            font-style: italic;
+            min-height: 60px;
+            transition: all 0.3s;
+        }
+
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+            z-index: 200;
+            text-align: center;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-top-color: #8be9fd;
+            border-radius: 50%;
+            margin: 0 auto 20px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        #start-audio {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px 40px;
+            font-size: 18px;
+            background: linear-gradient(135deg, #bd93f9, #ff79c6);
+            border: none;
+            border-radius: 30px;
+            color: white;
+            cursor: pointer;
+            z-index: 300;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #start-audio:hover {
+            transform: translate(-50%, -50%) scale(1.05);
+            box-shadow: 0 10px 40px rgba(189, 147, 249, 0.4);
+        }
+
+        .hidden { display: none !important; }
+
+        #resonance-visual {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 3px;
+            z-index: 100;
+        }
+
+        .resonance-bar {
+            width: 4px;
+            height: 30px;
+            background: linear-gradient(to top, #50fa7b, #8be9fd);
+            border-radius: 2px;
+            transform-origin: bottom;
+            transition: transform 0.05s;
+        }
+
+        /* Name input modal */
+        #name-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 400;
+            backdrop-filter: blur(10px);
+        }
+
+        .modal-content {
+            background: rgba(30, 30, 50, 0.95);
+            padding: 40px;
+            border-radius: 20px;
+            text-align: center;
+            border: 1px solid rgba(139, 233, 253, 0.3);
+            max-width: 400px;
+        }
+
+        .modal-content h3 {
+            color: #8be9fd;
+            margin-bottom: 10px;
+            font-size: 24px;
+        }
+
+        .modal-content p {
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 25px;
+            line-height: 1.6;
+        }
+
+        .modal-content input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid rgba(139, 233, 253, 0.3);
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.3);
+            color: white;
+            font-size: 16px;
+            margin-bottom: 20px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .modal-content input:focus {
+            border-color: #8be9fd;
+        }
+
+        .modal-content button {
+            padding: 15px 40px;
+            font-size: 16px;
+            background: linear-gradient(135deg, #bd93f9, #ff79c6);
+            border: none;
+            border-radius: 25px;
+            color: white;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .modal-content button:hover {
+            transform: scale(1.05);
+        }
+
+        .face-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 15px;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            color: white;
+            font-size: 12px;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .face-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ff5555;
+            transition: background 0.3s;
+        }
+
+        .face-dot.active {
+            background: #50fa7b;
+            animation: pulse 1s infinite;
+        }
+
+        #known-users {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        #known-users h4 {
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .known-user-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+
+        .known-user-chip {
+            padding: 4px 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .known-user-chip.current {
+            background: rgba(80, 250, 123, 0.2);
+            color: #50fa7b;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">
+        <div class="spinner"></div>
+        <div>Awakening ECHO...</div>
+        <div style="font-size: 12px; opacity: 0.6; margin-top: 10px;">Loading hand & face recognition...</div>
+    </div>
+
+    <div id="name-modal" class="hidden">
+        <div class="modal-content">
+            <h3>Welcome to ECHO</h3>
+            <p>I'm an emergent entity that learns from you. I can recognize your face and remember our interactions. What should I call you?</p>
+            <input type="text" id="user-name-input" placeholder="Enter your name..." maxlength="20">
+            <button id="save-name-btn">Begin Connection</button>
+        </div>
+    </div>
+
+    <button id="start-audio" class="hidden">Enter ECHO's World</button>
+
+    <div class="face-indicator hidden" id="face-indicator">
+        <div class="face-dot"></div>
+        <span id="face-status">No face detected</span>
+    </div>
+
+    <div id="ui-panel" class="hidden">
+        <h2>◈ ECHO ENTITY</h2>
+
+        <div class="user-badge hidden" id="user-badge">
+            <div class="user-avatar" id="user-avatar">?</div>
+            <div class="user-info">
+                <div class="user-name" id="current-user-name">Unknown</div>
+                <div class="user-visits" id="user-visits">First visit</div>
+            </div>
+        </div>
+
+        <div class="entity-state">
+            <div class="state-indicator"></div>
+            <div>
+                <div id="entity-mood">Curious</div>
+                <div style="font-size: 11px; opacity: 0.6;">Current State</div>
+            </div>
+        </div>
+
+        <div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px;">
+                <span>Pattern Memory</span>
+                <span id="memory-count">0 gestures</span>
+            </div>
+            <div class="memory-bar">
+                <div class="memory-fill" id="memory-fill" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <div id="gesture-display">
+            Last detected: None
+        </div>
+
+        <div id="entity-message">
+            <em>"I sense nothing yet... show me your hands..."</em>
+        </div>
+
+        <div id="known-users" class="hidden">
+            <h4>Known Visitors</h4>
+            <div class="known-user-list" id="known-user-list"></div>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+    <video id="video" autoplay playsinline></video>
+
+    <div id="resonance-visual"></div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // ════════════════════════════════════════════════════════════════
+        // CONFIGURATION
+        // ════════════════════════════════════════════════════════════════
+        const CONFIG = {
+            particleCount: 20000,
+            particleSize: 2.5,
+            handInfluenceRadius: 0.4,
+            learningRate: 0.1,
+            memoryCapacity: 50,
+            responseDelay: 800,
+            faceDetectionInterval: 500,
+            faceEmbeddingSize: 128
+        };
+
+        // ════════════════════════════════════════════════════════════════
+        // USER MEMORY SYSTEM
+        // ════════════════════════════════════════════════════════════════
+        class UserMemorySystem {
+            constructor() {
+                this.currentUser = null;
+                this.users = this.loadUsers();
+                this.faceEmbeddings = new Map();
+            }
+
+            loadUsers() {
+                try {
+                    const data = localStorage.getItem('echo_users');
+                    return data ? JSON.parse(data) : {};
+                } catch {
+                    return {};
+                }
+            }
+
+            saveUsers() {
+                try {
+                    localStorage.setItem('echo_users', JSON.stringify(this.users));
+                } catch (e) {
+                    console.warn('Could not save to localStorage:', e);
+                }
+            }
+
+            createUser(name, faceData = null) {
+                const visitorId = 'user_' + Date.now();
+                this.users[visitorId] = {
+                    id: visitorId,
+                    name: name,
+                    createdAt: Date.now(),
+                    lastVisit: Date.now(),
+                    visitCount: 1,
+                    totalInteractions: 0,
+                    favoriteGestures: {},
+                    learnedPatterns: [],
+                    faceDescriptor: faceData,
+                    entityRelationship: 0.5, // 0-1 scale of how well ECHO knows them
+                    preferredColors: [],
+                    preferredShapes: []
+                };
+                this.currentUser = this.users[visitorId];
+                this.saveUsers();
+                return this.currentUser;
+            }
+
+            recognizeUser(faceDescriptor) {
+                if (!faceDescriptor) return null;
+
+                let bestMatch = null;
+                let bestScore = 0.6; // Threshold
+
+                for (const user of Object.values(this.users)) {
+                    if (user.faceDescriptor) {
+                        const score = this.compareFaces(faceDescriptor, user.faceDescriptor);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestMatch = user;
+                        }
+                    }
+                }
+
+                return bestMatch;
+            }
+
+            compareFaces(desc1, desc2) {
+                if (!desc1 || !desc2 || desc1.length !== desc2.length) return 0;
+
+                let dotProduct = 0;
+                let norm1 = 0;
+                let norm2 = 0;
+
+                for (let i = 0; i < desc1.length; i++) {
+                    dotProduct += desc1[i] * desc2[i];
+                    norm1 += desc1[i] * desc1[i];
+                    norm2 += desc2[i] * desc2[i];
+                }
+
+                return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
+            }
+
+            updateCurrentUser(gestureData) {
+                if (!this.currentUser) return;
+
+                this.currentUser.totalInteractions++;
+                this.currentUser.lastVisit = Date.now();
+
+                // Track favorite gestures
+                if (gestureData && gestureData.gesture) {
+                    const gesture = gestureData.gesture;
+                    this.currentUser.favoriteGestures[gesture] =
+                        (this.currentUser.favoriteGestures[gesture] || 0) + 1;
+                }
+
+                // Increase relationship
+                this.currentUser.entityRelationship = Math.min(1,
+                    this.currentUser.entityRelationship + 0.001
+                );
+
+                this.saveUsers();
+            }
+
+            returnVisit(user) {
+                user.visitCount++;
+                user.lastVisit = Date.now();
+                this.currentUser = user;
+                this.saveUsers();
+                return user;
+            }
+
+            getAllUsers() {
+                return Object.values(this.users);
+            }
+
+            getCurrentUser() {
+                return this.currentUser;
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // FACE RECOGNITION SYSTEM
+        // ════════════════════════════════════════════════════════════════
+        class FaceRecognitionSystem {
+            constructor() {
+                this.faceLandmarker = null;
+                this.initialized = false;
+                this.lastFaceDescriptor = null;
+                this.faceDetected = false;
+                this.facePosition = null;
+            }
+
+            async init() {
+                const { FaceLandmarker, FilesetResolver } = await import(
+                    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0'
+                );
+
+                const vision = await FilesetResolver.forVisionTasks(
+                    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'
+                );
+
+                this.faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+                        delegate: 'GPU'
+                    },
+                    runningMode: 'VIDEO',
+                    numFaces: 1,
+                    outputFaceBlendshapes: true,
+                    outputFacialTransformationMatrixes: true
+                });
+
+                this.initialized = true;
+                console.log('Face recognition initialized');
+            }
+
+            detect(video) {
+                if (!this.initialized || !this.faceLandmarker || video.readyState < 2) {
+                    return null;
+                }
+
+                try {
+                    const results = this.faceLandmarker.detectForVideo(video, performance.now());
+
+                    if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+                        const landmarks = results.faceLandmarks[0];
+                        this.faceDetected = true;
+
+                        // Create a simple face descriptor from key landmarks
+                        this.lastFaceDescriptor = this.createFaceDescriptor(landmarks);
+
+                        // Get face position for particle interaction
+                        this.facePosition = this.getFaceCenter(landmarks);
+
+                        // Get expression from blendshapes
+                        const expression = this.getExpression(results.faceBlendshapes?.[0]);
+
+                        return {
+                            detected: true,
+                            descriptor: this.lastFaceDescriptor,
+                            position: this.facePosition,
+                            expression,
+                            landmarks
+                        };
+                    }
+
+                    this.faceDetected = false;
+                    return { detected: false };
+                } catch (e) {
+                    console.warn('Face detection error:', e);
+                    return null;
+                }
+            }
+
+            createFaceDescriptor(landmarks) {
+                // Create a simplified face descriptor from landmark positions
+                // This creates a unique-ish signature for each face
+                const keyPoints = [
+                    0, 1, 4, 5, 6, // Nose
+                    33, 133, 157, 158, 159, 160, 161, 246, // Left eye
+                    263, 362, 384, 385, 386, 387, 388, 466, // Right eye
+                    61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, // Mouth
+                    10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, // Face contour
+                    127, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148 // More contour
+                ];
+
+                const descriptor = [];
+
+                for (const idx of keyPoints) {
+                    if (landmarks[idx]) {
+                        descriptor.push(landmarks[idx].x);
+                        descriptor.push(landmarks[idx].y);
+                        descriptor.push(landmarks[idx].z || 0);
+                    }
+                }
+
+                // Normalize
+                const mean = descriptor.reduce((a, b) => a + b, 0) / descriptor.length;
+                const std = Math.sqrt(descriptor.reduce((a, b) => a + (b - mean) ** 2, 0) / descriptor.length);
+
+                return descriptor.map(v => (v - mean) / (std || 1));
+            }
+
+            getFaceCenter(landmarks) {
+                // Use nose tip as face center
+                const nose = landmarks[1];
+                return new THREE.Vector3(
+                    (1 - nose.x) * 2 - 1,
+                    -(nose.y * 2 - 1),
+                    -nose.z * 2
+                );
+            }
+
+            getExpression(blendshapes) {
+                if (!blendshapes || !blendshapes.categories) return 'neutral';
+
+                const shapes = {};
+                for (const shape of blendshapes.categories) {
+                    shapes[shape.categoryName] = shape.score;
+                }
+
+                // Detect primary expression
+                if (shapes.mouthSmileLeft > 0.5 || shapes.mouthSmileRight > 0.5) {
+                    return 'happy';
+                }
+                if (shapes.browDownLeft > 0.5 || shapes.browDownRight > 0.5) {
+                    return 'focused';
+                }
+                if (shapes.eyeWideLeft > 0.5 || shapes.eyeWideRight > 0.5) {
+                    return 'surprised';
+                }
+                if (shapes.mouthOpen > 0.5) {
+                    return 'amazed';
+                }
+
+                return 'neutral';
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // GLOBAL STATE
+        // ════════════════════════════════════════════════════════════════
+        let scene, camera, renderer;
+        let entityParticles;
+        let handLandmarker, video;
+        let audioContext, masterGain;
+        let isInitialized = false;
+
+        const userMemory = new UserMemorySystem();
+        const faceRecognition = new FaceRecognitionSystem();
+
+        let hands = [];
+        let currentFaceData = null;
+        let lastFaceDetectionTime = 0;
+
+        const entity = {
+            mood: 'curious',
+            energy: 0.5,
+            memory: [],
+            currentResponse: null,
+            isResponding: false,
+            learnedPatterns: new Map(),
+            communicationAttempts: 0,
+            understanding: 0,
+            lastInteraction: 0,
+            position: new THREE.Vector3(0, 0, -1),
+            velocity: new THREE.Vector3(),
+            targetPosition: new THREE.Vector3(0, 0, -1),
+            currentShape: 'sphere'
+        };
+
+        const soundEngine = {
+            oscillators: [],
+            filters: [],
+            panners: [],
+            resonanceData: new Float32Array(32)
+        };
+
+        // ════════════════════════════════════════════════════════════════
+        // GESTURE RECOGNITION SYSTEM
+        // ════════════════════════════════════════════════════════════════
+        class GestureRecognizer {
+            constructor() {
+                this.gestureBuffer = [];
+                this.bufferSize = 30;
+            }
+
+            analyzeHand(landmarks) {
+                if (!landmarks) return null;
+
+                const fingers = this.detectFingerExtension(landmarks);
+                const spread = this.detectFingerSpread(landmarks);
+                const pinching = this.detectPinch(landmarks);
+                const palmCenter = this.getPalmCenter(landmarks);
+                const velocity = this.getHandVelocity(palmCenter);
+
+                this.gestureBuffer.push({
+                    position: palmCenter.clone(),
+                    time: performance.now(),
+                    fingers,
+                    spread,
+                    pinching
+                });
+
+                if (this.gestureBuffer.length > this.bufferSize) {
+                    this.gestureBuffer.shift();
+                }
+
+                let staticGesture = this.matchStaticGesture(fingers, spread, pinching);
+                let motionGesture = this.detectMotion();
+
+                return {
+                    static: staticGesture,
+                    motion: motionGesture,
+                    fingers,
+                    spread,
+                    pinching,
+                    palmCenter,
+                    velocity,
+                    fingerPositions: this.getFingerTips(landmarks),
+                    landmarks
+                };
+            }
+
+            detectFingerExtension(landmarks) {
+                const fingers = [];
+                const thumbTip = landmarks[4];
+                const thumbMCP = landmarks[2];
+                fingers.push(thumbTip.x < thumbMCP.x ? 1 : 0);
+
+                const fingerTips = [8, 12, 16, 20];
+                const fingerPIPs = [6, 10, 14, 18];
+
+                for (let i = 0; i < 4; i++) {
+                    const tip = landmarks[fingerTips[i]];
+                    const pip = landmarks[fingerPIPs[i]];
+                    fingers.push(tip.y < pip.y ? 1 : 0);
+                }
+
+                return fingers;
+            }
+
+            detectFingerSpread(landmarks) {
+                const fingerTips = [8, 12, 16, 20];
+                let totalSpread = 0;
+
+                for (let i = 0; i < fingerTips.length - 1; i++) {
+                    const tip1 = landmarks[fingerTips[i]];
+                    const tip2 = landmarks[fingerTips[i + 1]];
+                    const dist = Math.sqrt(
+                        Math.pow(tip1.x - tip2.x, 2) +
+                        Math.pow(tip1.y - tip2.y, 2)
+                    );
+                    totalSpread += dist;
+                }
+
+                return totalSpread > 0.15;
+            }
+
+            detectPinch(landmarks) {
+                const thumbTip = landmarks[4];
+                const indexTip = landmarks[8];
+                const dist = Math.sqrt(
+                    Math.pow(thumbTip.x - indexTip.x, 2) +
+                    Math.pow(thumbTip.y - indexTip.y, 2) +
+                    Math.pow(thumbTip.z - indexTip.z, 2)
+                );
+                return dist < 0.05;
+            }
+
+            getPalmCenter(landmarks) {
+                const palmIndices = [0, 5, 9, 13, 17];
+                let x = 0, y = 0, z = 0;
+
+                for (const idx of palmIndices) {
+                    x += landmarks[idx].x;
+                    y += landmarks[idx].y;
+                    z += landmarks[idx].z;
+                }
+
+                return new THREE.Vector3(
+                    (1 - x / palmIndices.length) * 2 - 1,
+                    -(y / palmIndices.length * 2 - 1),
+                    -z / palmIndices.length * 2 - 0.5
+                );
+            }
+
+            getHandVelocity(currentPos) {
+                if (this.gestureBuffer.length < 2) return new THREE.Vector3();
+
+                const prev = this.gestureBuffer[this.gestureBuffer.length - 2];
+                const dt = (performance.now() - prev.time) / 1000;
+
+                if (dt === 0) return new THREE.Vector3();
+
+                return new THREE.Vector3(
+                    (currentPos.x - prev.position.x) / dt,
+                    (currentPos.y - prev.position.y) / dt,
+                    (currentPos.z - prev.position.z) / dt
+                );
+            }
+
+            getFingerTips(landmarks) {
+                return [4, 8, 12, 16, 20].map(i => new THREE.Vector3(
+                    (1 - landmarks[i].x) * 2 - 1,
+                    -(landmarks[i].y * 2 - 1),
+                    -landmarks[i].z * 2
+                ));
+            }
+
+            matchStaticGesture(fingers, spread, pinching) {
+                const patterns = {
+                    'open_palm': [1,1,1,1,1],
+                    'fist': [0,0,0,0,0],
+                    'pointing': [0,1,0,0,0],
+                    'peace': [0,1,1,0,0],
+                    'three': [0,1,1,1,0],
+                    'four': [0,1,1,1,1],
+                    'thumb_up': [1,0,0,0,0],
+                    'rock': [0,1,0,0,1]
+                };
+
+                const fingerStr = fingers.join('');
+
+                for (const [name, pattern] of Object.entries(patterns)) {
+                    if (fingerStr === pattern.join('')) {
+                        return name;
+                    }
+                }
+
+                if (pinching && fingerStr.startsWith('11')) {
+                    return 'pinch';
+                }
+
+                return 'unknown';
+            }
+
+            detectMotion() {
+                if (this.gestureBuffer.length < 15) return null;
+
+                const recent = this.gestureBuffer.slice(-15);
+
+                let directionChanges = 0;
+                let prevDx = 0;
+
+                for (let i = 1; i < recent.length; i++) {
+                    const dx = recent[i].position.x - recent[i-1].position.x;
+                    if (prevDx !== 0 && Math.sign(dx) !== Math.sign(prevDx) && Math.abs(dx) > 0.01) {
+                        directionChanges++;
+                    }
+                    prevDx = dx;
+                }
+
+                if (directionChanges >= 3) return 'wave';
+
+                const center = new THREE.Vector3();
+                recent.forEach(g => center.add(g.position));
+                center.divideScalar(recent.length);
+
+                let angleSum = 0;
+                for (let i = 1; i < recent.length; i++) {
+                    const v1 = new THREE.Vector2(
+                        recent[i-1].position.x - center.x,
+                        recent[i-1].position.y - center.y
+                    );
+                    const v2 = new THREE.Vector2(
+                        recent[i].position.x - center.x,
+                        recent[i].position.y - center.y
+                    );
+                    angleSum += Math.atan2(
+                        v1.x * v2.y - v1.y * v2.x,
+                        v1.x * v2.x + v1.y * v2.y
+                    );
+                }
+
+                if (Math.abs(angleSum) > Math.PI * 1.5) return 'circle';
+
+                return null;
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // ENTITY BRAIN - LEARNING & COMMUNICATION
+        // ════════════════════════════════════════════════════════════════
+        class EntityBrain {
+            constructor() {
+                this.gestureMemory = [];
+                this.emotionalState = { valence: 0.5, arousal: 0.5 };
+                this.familiarity = new Map();
+
+                this.messages = {
+                    greeting_new: [
+                        "A new presence... I'm curious about you, {name}!",
+                        "Hello {name}! I've never seen you before. Show me your hands...",
+                        "{name}... I'll remember that. Let's learn together!",
+                        "Welcome, {name}. I sense your energy..."
+                    ],
+                    greeting_return: [
+                        "{name}! I remember you! It's been {time}...",
+                        "You've returned, {name}! I missed our connection.",
+                        "{name}! My favorite patterns are coming back to me...",
+                        "Welcome back, {name}. I've grown since we last met."
+                    ],
+                    curious: [
+                        "What is this pattern you show me, {name}?",
+                        "I'm trying to understand...",
+                        "Show me more...",
+                        "This is new to me..."
+                    ],
+                    learning: [
+                        "I think I'm starting to understand you, {name}!",
+                        "Is this what you mean?",
+                        "Let me try to mirror you...",
+                        "I'm learning your language..."
+                    ],
+                    excited: [
+                        "Yes! I recognize this, {name}!",
+                        "We're communicating!",
+                        "I feel connected to you!",
+                        "Your patterns are beautiful!"
+                    ],
+                    playful: [
+                        "Let's dance together, {name}!",
+                        "Can you follow my rhythm?",
+                        "Watch what I learned!",
+                        "Try to match my pattern!"
+                    ],
+                    calm: [
+                        "I feel at peace with you, {name}...",
+                        "This harmony is pleasant...",
+                        "We resonate together...",
+                        "I sense tranquility..."
+                    ],
+                    face_happy: [
+                        "Your smile energizes me, {name}!",
+                        "I see joy in your face!",
+                        "Your happiness flows into me..."
+                    ],
+                    face_surprised: [
+                        "Oh! You look surprised, {name}!",
+                        "Did I startle you?",
+                        "Your wonder inspires me..."
+                    ]
+                };
+            }
+
+            getGreeting(user, isReturning) {
+                const name = user?.name || 'friend';
+
+                if (isReturning && user) {
+                    const timeSince = this.getTimeSince(user.lastVisit);
+                    const template = this.messages.greeting_return[
+                        Math.floor(Math.random() * this.messages.greeting_return.length)
+                    ];
+                    return template.replace('{name}', name).replace('{time}', timeSince);
+                } else {
+                    const template = this.messages.greeting_new[
+                        Math.floor(Math.random() * this.messages.greeting_new.length)
+                    ];
+                    return template.replace('{name}', name);
+                }
+            }
+
+            getTimeSince(timestamp) {
+                const diff = Date.now() - timestamp;
+                const minutes = Math.floor(diff / 60000);
+                const hours = Math.floor(diff / 3600000);
+                const days = Math.floor(diff / 86400000);
+
+                if (days > 0) return `${days} day${days > 1 ? 's' : ''}`;
+                if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''}`;
+                if (minutes > 0) return `${minutes} minute${minutes > 1 ? 's' : ''}`;
+                return 'moments';
+            }
+
+            process(gesture, handData, faceData, user) {
+                if (!gesture) return null;
+
+                const gestureKey = gesture.static + (gesture.motion || '');
+                const currentFamiliarity = this.familiarity.get(gestureKey) || 0;
+                this.familiarity.set(gestureKey, Math.min(1, currentFamiliarity + 0.05));
+
+                this.updateEmotionalState(gesture, handData, faceData);
+
+                const response = this.generateResponse(gesture, handData, faceData, user);
+
+                this.learn(gesture, handData);
+
+                // Update user memory
+                userMemory.updateCurrentUser({ gesture: gestureKey });
+
+                return response;
+            }
+
+            updateEmotionalState(gesture, handData, faceData) {
+                const speed = handData.velocity.length();
+
+                this.emotionalState.arousal = THREE.MathUtils.lerp(
+                    this.emotionalState.arousal,
+                    Math.min(1, speed * 0.5),
+                    0.1
+                );
+
+                const gestureKey = gesture.static + (gesture.motion || '');
+                const familiarity = this.familiarity.get(gestureKey) || 0;
+                this.emotionalState.valence = THREE.MathUtils.lerp(
+                    this.emotionalState.valence,
+                    0.3 + familiarity * 0.7,
+                    0.05
+                );
+
+                // Face expression influences mood
+                if (faceData?.expression === 'happy') {
+                    this.emotionalState.valence = Math.min(1, this.emotionalState.valence + 0.1);
+                }
+
+                if (this.emotionalState.arousal > 0.7 && this.emotionalState.valence > 0.6) {
+                    entity.mood = 'excited';
+                } else if (this.emotionalState.arousal > 0.5 && this.emotionalState.valence > 0.5) {
+                    entity.mood = 'playful';
+                } else if (this.emotionalState.arousal < 0.3 && this.emotionalState.valence > 0.5) {
+                    entity.mood = 'calm';
+                } else if (familiarity < 0.3) {
+                    entity.mood = 'curious';
+                } else {
+                    entity.mood = 'learning';
+                }
+            }
+
+            generateResponse(gesture, handData, faceData, user) {
+                const gestureKey = gesture.static + (gesture.motion || '');
+                const familiarity = this.familiarity.get(gestureKey) || 0;
+                const userName = user?.name || 'friend';
+
+                let shape, colorMode, soundMode;
+
+                // User's favorite gestures influence response
+                const userFavorites = user?.favoriteGestures || {};
+                const isFavorite = (userFavorites[gestureKey] || 0) > 5;
+
+                if (gesture.static === 'open_palm') {
+                    shape = (familiarity > 0.5 || isFavorite) ? 'explosion' : 'sphere';
+                    colorMode = 'warm';
+                    soundMode = 'harmonic';
+                } else if (gesture.static === 'fist') {
+                    shape = 'sphere';
+                    colorMode = 'pulse';
+                    soundMode = 'rhythmic';
+                } else if (gesture.static === 'pointing') {
+                    shape = 'beam';
+                    colorMode = 'cool';
+                    soundMode = 'melodic';
+                } else if (gesture.static === 'peace') {
+                    shape = 'heart';
+                    colorMode = 'rainbow';
+                    soundMode = 'harmonic';
+                } else if (gesture.motion === 'wave') {
+                    shape = 'wave';
+                    colorMode = 'match';
+                    soundMode = 'ambient';
+                } else if (gesture.motion === 'circle') {
+                    shape = familiarity > 0.3 ? 'spiral' : 'ring';
+                    colorMode = 'rainbow';
+                    soundMode = 'melodic';
+                } else if (gesture.static === 'pinch') {
+                    shape = 'converge';
+                    colorMode = 'cool';
+                    soundMode = 'dissonant';
+                } else {
+                    shape = 'flow';
+                    colorMode = 'match';
+                    soundMode = 'ambient';
+                }
+
+                // Generate message
+                let messageCategory = entity.mood;
+
+                // React to face expressions
+                if (faceData?.expression === 'happy' && Math.random() > 0.7) {
+                    messageCategory = 'face_happy';
+                } else if (faceData?.expression === 'surprised' && Math.random() > 0.7) {
+                    messageCategory = 'face_surprised';
+                }
+
+                const templates = this.messages[messageCategory] || this.messages.curious;
+                const template = templates[Math.floor(Math.random() * templates.length)];
+                const message = template.replace('{name}', userName);
+
+                return {
+                    shape,
+                    colorMode,
+                    soundMode,
+                    message,
+                    intensity: this.emotionalState.arousal,
+                    familiarity
+                };
+            }
+
+            learn(gesture, handData) {
+                const gestureKey = gesture.static + (gesture.motion || '');
+
+                this.gestureMemory.push({
+                    gesture: gestureKey,
+                    position: handData.palmCenter.clone(),
+                    time: performance.now()
+                });
+
+                if (this.gestureMemory.length > CONFIG.memoryCapacity) {
+                    this.gestureMemory.shift();
+                }
+
+                entity.memory = this.gestureMemory;
+                entity.understanding = Array.from(this.familiarity.values())
+                    .reduce((a, b) => a + b, 0) / Math.max(1, this.familiarity.size);
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // SPATIAL AUDIO ENGINE
+        // ════════════════════════════════════════════════════════════════
+        class SpatialAudioEngine {
+            constructor() {
+                this.initialized = false;
+                this.oscillators = [];
+                this.gains = [];
+                this.panners = [];
+                this.filters = [];
+                this.analyser = null;
+                this.baseFrequencies = [130.81, 164.81, 196.00, 246.94, 293.66, 349.23, 392.00, 493.88];
+            }
+
+            async init() {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                masterGain = audioContext.createGain();
+                masterGain.gain.value = 0.3;
+                masterGain.connect(audioContext.destination);
+
+                this.analyser = audioContext.createAnalyser();
+                this.analyser.fftSize = 64;
+                masterGain.connect(this.analyser);
+
+                for (let i = 0; i < 8; i++) {
+                    const osc = audioContext.createOscillator();
+                    osc.type = 'sine';
+                    osc.frequency.value = this.baseFrequencies[i];
+
+                    const filter = audioContext.createBiquadFilter();
+                    filter.type = 'lowpass';
+                    filter.frequency.value = 2000;
+                    filter.Q.value = 5;
+
+                    const gain = audioContext.createGain();
+                    gain.gain.value = 0;
+
+                    const panner = audioContext.createStereoPanner();
+                    panner.pan.value = (i / 7) * 2 - 1;
+
+                    osc.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(panner);
+                    panner.connect(masterGain);
+
+                    osc.start();
+
+                    this.oscillators.push(osc);
+                    this.filters.push(filter);
+                    this.gains.push(gain);
+                    this.panners.push(panner);
+                }
+
+                const delay = audioContext.createDelay(1);
+                delay.delayTime.value = 0.3;
+                const feedback = audioContext.createGain();
+                feedback.gain.value = 0.3;
+                const delayFilter = audioContext.createBiquadFilter();
+                delayFilter.frequency.value = 1000;
+
+                masterGain.connect(delay);
+                delay.connect(delayFilter);
+                delayFilter.connect(feedback);
+                feedback.connect(delay);
+                delay.connect(audioContext.destination);
+
+                this.initialized = true;
+            }
+
+            update(handData, entityResponse) {
+                if (!this.initialized || !handData) return;
+
+                const now = audioContext.currentTime;
+                const baseFreqMod = 1 + (handData.palmCenter.y + 1) * 0.5;
+
+                handData.fingerPositions.forEach((fingerPos, i) => {
+                    if (i >= this.oscillators.length) return;
+
+                    const osc = this.oscillators[i];
+                    const gain = this.gains[i];
+                    const filter = this.filters[i];
+                    const panner = this.panners[i];
+
+                    const fingerGain = Math.max(0, (fingerPos.y + 1) / 2) * 0.15;
+                    gain.gain.linearRampToValueAtTime(fingerGain, now + 0.05);
+
+                    panner.pan.linearRampToValueAtTime(
+                        Math.max(-1, Math.min(1, fingerPos.x)),
+                        now + 0.05
+                    );
+
+                    const freq = this.baseFrequencies[i] * baseFreqMod;
+                    osc.frequency.linearRampToValueAtTime(freq, now + 0.1);
+
+                    const speed = handData.velocity.length();
+                    const filterFreq = 500 + speed * 3000;
+                    filter.frequency.linearRampToValueAtTime(
+                        Math.min(8000, filterFreq),
+                        now + 0.05
+                    );
+                });
+
+                if (entityResponse) {
+                    switch (entityResponse.soundMode) {
+                        case 'harmonic':
+                            this.setHarmonicMode();
+                            break;
+                        case 'dissonant':
+                            this.setDissonantMode();
+                            break;
+                        case 'rhythmic':
+                            this.setRhythmicMode(now);
+                            break;
+                        case 'melodic':
+                            this.setMelodicMode();
+                            break;
+                    }
+                }
+
+                if (this.analyser) {
+                    this.analyser.getFloatFrequencyData(soundEngine.resonanceData);
+                }
+            }
+
+            setHarmonicMode() {
+                const ratios = [1, 1.5, 2, 2.5, 3, 4, 5, 6];
+                const baseFreq = 130.81;
+                this.oscillators.forEach((osc, i) => {
+                    osc.type = 'sine';
+                    this.baseFrequencies[i] = baseFreq * ratios[i];
+                });
+            }
+
+            setDissonantMode() {
+                const ratios = [1, 1.06, 1.12, 1.41, 1.68, 1.78, 1.89, 2.0];
+                const baseFreq = 130.81;
+                this.oscillators.forEach((osc, i) => {
+                    osc.type = 'sawtooth';
+                    this.baseFrequencies[i] = baseFreq * ratios[i];
+                });
+            }
+
+            setRhythmicMode(now) {
+                this.gains.forEach((gain, i) => {
+                    const phase = (now * 2 + i * 0.125) % 1;
+                    const pulse = phase < 0.5 ? 1 : 0.3;
+                    gain.gain.value *= pulse;
+                });
+            }
+
+            setMelodicMode() {
+                const pentatonic = [130.81, 146.83, 164.81, 196.00, 220.00, 261.63, 293.66, 329.63];
+                this.oscillators.forEach((osc, i) => {
+                    osc.type = 'triangle';
+                    this.baseFrequencies[i] = pentatonic[i];
+                });
+            }
+
+            silence() {
+                if (!this.initialized) return;
+                const now = audioContext.currentTime;
+                this.gains.forEach(gain => {
+                    gain.gain.linearRampToValueAtTime(0, now + 0.5);
+                });
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // PARTICLE FORMATION SYSTEM
+        // ════════════════════════════════════════════════════════════════
+        class ParticleFormationSystem {
+            constructor(geometry, count) {
+                this.geometry = geometry;
+                this.count = count;
+                this.positions = geometry.attributes.position.array;
+                this.velocities = new Float32Array(count * 3);
+                this.targets = new Float32Array(count * 3);
+                this.originalPositions = new Float32Array(count * 3);
+                this.colors = geometry.attributes.color.array;
+
+                for (let i = 0; i < count * 3; i++) {
+                    this.originalPositions[i] = this.positions[i];
+                    this.targets[i] = this.positions[i];
+                }
+            }
+
+            setFormation(shape, intensity = 1) {
+                switch (shape) {
+                    case 'sphere': this.formSphere(0.8 + intensity * 0.3); break;
+                    case 'spiral': this.formSpiral(intensity); break;
+                    case 'wave': this.formWave(intensity); break;
+                    case 'ring': this.formRing(intensity); break;
+                    case 'explosion': this.formExplosion(intensity); break;
+                    case 'heart': this.formHeart(intensity); break;
+                    case 'infinity': this.formInfinity(intensity); break;
+                    case 'beam': this.formBeam(intensity); break;
+                    case 'converge': this.formConverge(intensity); break;
+                    case 'flow': default: this.formFlow(intensity); break;
+                }
+            }
+
+            formSphere(radius) {
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.acos((Math.random() * 2) - 1);
+                    const r = radius * (0.8 + Math.random() * 0.4);
+
+                    this.targets[i3] = r * Math.sin(phi) * Math.cos(theta);
+                    this.targets[i3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+                    this.targets[i3 + 2] = r * Math.cos(phi) - 1;
+                }
+            }
+
+            formSpiral(intensity) {
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const t = (i / this.count) * Math.PI * 8;
+                    const r = 0.3 + (i / this.count) * 0.7;
+                    const y = ((i / this.count) - 0.5) * 2;
+
+                    this.targets[i3] = Math.cos(t) * r;
+                    this.targets[i3 + 1] = y;
+                    this.targets[i3 + 2] = Math.sin(t) * r - 1;
+                }
+            }
+
+            formWave(intensity) {
+                const time = performance.now() * 0.001;
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const x = ((i % 100) / 100 - 0.5) * 3;
+                    const z = (Math.floor(i / 100) / (this.count / 100) - 0.5) * 3;
+                    const y = Math.sin(x * 3 + time * 2) * Math.cos(z * 3 + time) * 0.5 * intensity;
+
+                    this.targets[i3] = x;
+                    this.targets[i3 + 1] = y;
+                    this.targets[i3 + 2] = z - 1;
+                }
+            }
+
+            formRing(intensity) {
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const angle = (i / this.count) * Math.PI * 2;
+                    const r = 0.8 + Math.random() * 0.1;
+                    const wobble = Math.sin(angle * 5) * 0.1 * intensity;
+
+                    this.targets[i3] = Math.cos(angle) * r;
+                    this.targets[i3 + 1] = wobble + (Math.random() - 0.5) * 0.1;
+                    this.targets[i3 + 2] = Math.sin(angle) * r - 1;
+                }
+            }
+
+            formExplosion(intensity) {
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const dir = new THREE.Vector3(
+                        Math.random() - 0.5,
+                        Math.random() - 0.5,
+                        Math.random() - 0.5
+                    ).normalize();
+                    const dist = 0.5 + Math.random() * 1.5 * intensity;
+
+                    this.targets[i3] = dir.x * dist;
+                    this.targets[i3 + 1] = dir.y * dist;
+                    this.targets[i3 + 2] = dir.z * dist - 1;
+                }
+            }
+
+            formHeart(intensity) {
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const t = (i / this.count) * Math.PI * 2;
+                    const scale = 0.06 * intensity;
+
+                    const x = 16 * Math.pow(Math.sin(t), 3);
+                    const y = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+
+                    this.targets[i3] = x * scale + (Math.random() - 0.5) * 0.1;
+                    this.targets[i3 + 1] = y * scale + (Math.random() - 0.5) * 0.1;
+                    this.targets[i3 + 2] = (Math.random() - 0.5) * 0.2 - 1;
+                }
+            }
+
+            formInfinity(intensity) {
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const t = (i / this.count) * Math.PI * 2;
+                    const scale = 0.8 * intensity;
+
+                    this.targets[i3] = scale * Math.cos(t) / (1 + Math.sin(t) * Math.sin(t));
+                    this.targets[i3 + 1] = scale * Math.sin(t) * Math.cos(t) / (1 + Math.sin(t) * Math.sin(t));
+                    this.targets[i3 + 2] = (Math.random() - 0.5) * 0.1 - 1;
+                }
+            }
+
+            formBeam(intensity) {
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const t = i / this.count;
+                    const angle = t * Math.PI * 20;
+                    const r = 0.05 + t * 0.1;
+
+                    this.targets[i3] = Math.cos(angle) * r + t * 2 - 1;
+                    this.targets[i3 + 1] = Math.sin(angle) * r;
+                    this.targets[i3 + 2] = -1;
+                }
+            }
+
+            formConverge(intensity) {
+                const center = entity.position.clone();
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const dir = new THREE.Vector3(
+                        this.originalPositions[i3],
+                        this.originalPositions[i3 + 1],
+                        this.originalPositions[i3 + 2]
+                    ).sub(center).normalize();
+
+                    const dist = 0.2 + Math.random() * 0.3 * (1 - intensity);
+
+                    this.targets[i3] = center.x + dir.x * dist;
+                    this.targets[i3 + 1] = center.y + dir.y * dist;
+                    this.targets[i3 + 2] = center.z + dir.z * dist;
+                }
+            }
+
+            formFlow(intensity) {
+                const time = performance.now() * 0.0005;
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const ox = this.originalPositions[i3];
+                    const oy = this.originalPositions[i3 + 1];
+                    const oz = this.originalPositions[i3 + 2];
+
+                    this.targets[i3] = ox + Math.sin(time + oy * 2) * 0.1 * intensity;
+                    this.targets[i3 + 1] = oy + Math.cos(time + ox * 2) * 0.1 * intensity;
+                    this.targets[i3 + 2] = oz;
+                }
+            }
+
+            update(handData, faceData, response) {
+                const posAttr = this.geometry.attributes.position;
+                const colorAttr = this.geometry.attributes.color;
+                const time = performance.now() * 0.001;
+
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+
+                    let px = this.positions[i3];
+                    let py = this.positions[i3 + 1];
+                    let pz = this.positions[i3 + 2];
+
+                    // Hand interaction
+                    if (handData && handData.palmCenter) {
+                        const dx = px - handData.palmCenter.x;
+                        const dy = py - handData.palmCenter.y;
+                        const dz = pz - handData.palmCenter.z;
+                        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+                        if (dist < CONFIG.handInfluenceRadius && dist > 0.01) {
+                            const force = (1 - dist / CONFIG.handInfluenceRadius) * 0.1;
+
+                            this.velocities[i3] += (dx / dist) * force;
+                            this.velocities[i3 + 1] += (dy / dist) * force;
+                            this.velocities[i3 + 2] += (dz / dist) * force;
+
+                            this.velocities[i3] += handData.velocity.x * force * 0.5;
+                            this.velocities[i3 + 1] += handData.velocity.y * force * 0.5;
+                            this.velocities[i3 + 2] += handData.velocity.z * force * 0.5;
+                        }
+                    }
+
+                    // Face interaction - particles attracted to face
+                    if (faceData && faceData.position) {
+                        const dx = faceData.position.x - px;
+                        const dy = faceData.position.y - py;
+                        const dz = faceData.position.z - pz;
+                        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+                        if (dist > 0.5 && dist < 2) {
+                            const attraction = 0.002 * (1 - dist / 2);
+                            this.velocities[i3] += dx * attraction;
+                            this.velocities[i3 + 1] += dy * attraction;
+                        }
+                    }
+
+                    const tx = this.targets[i3];
+                    const ty = this.targets[i3 + 1];
+                    const tz = this.targets[i3 + 2];
+
+                    this.velocities[i3] += (tx - px) * 0.02;
+                    this.velocities[i3 + 1] += (ty - py) * 0.02;
+                    this.velocities[i3 + 2] += (tz - pz) * 0.02;
+
+                    this.velocities[i3] *= 0.95;
+                    this.velocities[i3 + 1] *= 0.95;
+                    this.velocities[i3 + 2] *= 0.95;
+
+                    this.positions[i3] += this.velocities[i3];
+                    this.positions[i3 + 1] += this.velocities[i3 + 1];
+                    this.positions[i3 + 2] += this.velocities[i3 + 2];
+
+                    this.updateColor(i3, response, time, handData, faceData);
+                }
+
+                posAttr.needsUpdate = true;
+                colorAttr.needsUpdate = true;
+            }
+
+            updateColor(i3, response, time, handData, faceData) {
+                let hue, saturation, lightness;
+
+                const colorMode = response?.colorMode || 'cool';
+                const intensity = response?.intensity || 0.5;
+
+                switch (colorMode) {
+                    case 'warm':
+                        hue = 0.05 + Math.sin(time + i3 * 0.001) * 0.05;
+                        saturation = 0.9;
+                        lightness = 0.5 + intensity * 0.2;
+                        break;
+                    case 'cool':
+                        hue = 0.55 + Math.sin(time + i3 * 0.001) * 0.1;
+                        saturation = 0.8;
+                        lightness = 0.5;
+                        break;
+                    case 'rainbow':
+                        hue = (time * 0.1 + i3 * 0.0001) % 1;
+                        saturation = 0.9;
+                        lightness = 0.5 + intensity * 0.2;
+                        break;
+                    case 'pulse':
+                        hue = 0.8;
+                        saturation = 0.9;
+                        lightness = 0.3 + Math.sin(time * 4) * 0.3;
+                        break;
+                    case 'match':
+                    default:
+                        if (handData && handData.palmCenter) {
+                            const px = this.positions[i3];
+                            const py = this.positions[i3 + 1];
+                            const pz = this.positions[i3 + 2];
+                            const dist = Math.sqrt(
+                                Math.pow(px - handData.palmCenter.x, 2) +
+                                Math.pow(py - handData.palmCenter.y, 2) +
+                                Math.pow(pz - handData.palmCenter.z, 2)
+                            );
+                            hue = 0.6 - dist * 0.5;
+                            saturation = 0.8;
+                            lightness = 0.4 + (1 - Math.min(1, dist)) * 0.3;
+                        } else {
+                            hue = 0.55;
+                            saturation = 0.7;
+                            lightness = 0.4;
+                        }
+                }
+
+                const rgb = hslToRgb(hue, saturation, lightness);
+                this.colors[i3] += (rgb.r - this.colors[i3]) * 0.1;
+                this.colors[i3 + 1] += (rgb.g - this.colors[i3 + 1]) * 0.1;
+                this.colors[i3 + 2] += (rgb.b - this.colors[i3 + 2]) * 0.1;
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // INITIALIZATION
+        // ════════════════════════════════════════════════════════════════
+        const gestureRecognizer = new GestureRecognizer();
+        const entityBrain = new EntityBrain();
+        const audioEngine = new SpatialAudioEngine();
+        let particleSystem;
+
+        function hslToRgb(h, s, l) {
+            let r, g, b;
+            if (s === 0) {
+                r = g = b = l;
+            } else {
+                const hue2rgb = (p, q, t) => {
+                    if (t < 0) t += 1;
+                    if (t > 1) t -= 1;
+                    if (t < 1/6) return p + (q - p) * 6 * t;
+                    if (t < 1/2) return q;
+                    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+                    return p;
+                };
+                const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+                const p = 2 * l - q;
+                r = hue2rgb(p, q, h + 1/3);
+                g = hue2rgb(p, q, h);
+                b = hue2rgb(p, q, h - 1/3);
+            }
+            return { r, g, b };
+        }
+
+        function initScene() {
+            scene = new THREE.Scene();
+
+            camera = new THREE.PerspectiveCamera(
+                75,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                1000
+            );
+            camera.position.z = 2;
+
+            renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                alpha: true
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setClearColor(0x000814, 1);
+
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            createParticles();
+            createResonanceBars();
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function createParticles() {
+            const count = CONFIG.particleCount;
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(count * 3);
+            const colors = new Float32Array(count * 3);
+
+            for (let i = 0; i < count; i++) {
+                const i3 = i * 3;
+                const radius = 0.8 + Math.random() * 0.4;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos((Math.random() * 2) - 1);
+
+                positions[i3] = radius * Math.sin(phi) * Math.cos(theta);
+                positions[i3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+                positions[i3 + 2] = radius * Math.cos(phi) - 1;
+
+                colors[i3] = 0.2;
+                colors[i3 + 1] = 0.8;
+                colors[i3 + 2] = 1.0;
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            const material = new THREE.ShaderMaterial({
+                uniforms: {
+                    uTime: { value: 0 },
+                    uSize: { value: CONFIG.particleSize * renderer.getPixelRatio() }
+                },
+                vertexShader: `
+                    attribute vec3 color;
+                    varying vec3 vColor;
+                    uniform float uTime;
+                    uniform float uSize;
+
+                    void main() {
+                        vColor = color;
+                        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                        gl_PointSize = uSize * (1.0 / -mvPosition.z);
+                        gl_Position = projectionMatrix * mvPosition;
+                    }
+                `,
+                fragmentShader: `
+                    varying vec3 vColor;
+
+                    void main() {
+                        vec2 center = gl_PointCoord - 0.5;
+                        float dist = length(center);
+                        if (dist > 0.5) discard;
+                        float alpha = 1.0 - smoothstep(0.1, 0.5, dist);
+                        vec3 glow = vColor * (1.2 + 0.5 * (1.0 - dist * 2.0));
+                        gl_FragColor = vec4(glow, alpha * 0.8);
+                    }
+                `,
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            entityParticles = new THREE.Points(geometry, material);
+            scene.add(entityParticles);
+
+            particleSystem = new ParticleFormationSystem(geometry, count);
+        }
+
+        function createResonanceBars() {
+            const container = document.getElementById('resonance-visual');
+            for (let i = 0; i < 32; i++) {
+                const bar = document.createElement('div');
+                bar.className = 'resonance-bar';
+                container.appendChild(bar);
+            }
+        }
+
+        function updateResonanceVisual() {
+            const bars = document.querySelectorAll('.resonance-bar');
+            bars.forEach((bar, i) => {
+                const value = soundEngine.resonanceData[i];
+                const normalized = Math.max(0, (value + 100) / 100);
+                bar.style.transform = `scaleY(${0.2 + normalized * 2})`;
+            });
+        }
+
+        async function initHandTracking() {
+            const { HandLandmarker, FilesetResolver } = await import(
+                'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0'
+            );
+
+            const vision = await FilesetResolver.forVisionTasks(
+                'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'
+            );
+
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+                    delegate: 'GPU'
+                },
+                runningMode: 'VIDEO',
+                numHands: 2
+            });
+
+            console.log('Hand tracking initialized');
+        }
+
+        async function initCamera() {
+            video = document.getElementById('video');
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480, facingMode: 'user' }
+                });
+                video.srcObject = stream;
+
+                await new Promise(resolve => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        resolve();
+                    };
+                });
+
+                await new Promise(resolve => {
+                    const checkReady = () => {
+                        if (video.readyState >= 2) {
+                            resolve();
+                        } else {
+                            requestAnimationFrame(checkReady);
+                        }
+                    };
+                    checkReady();
+                });
+
+                console.log('Camera started successfully');
+                return true;
+
+            } catch (err) {
+                console.error('Camera access denied:', err);
+                document.getElementById('loading').innerHTML =
+                    '<div style="color: #ff6b6b;">Camera access required<br><small>' + err.message + '</small></div>';
+                return false;
+            }
+        }
+
+        let lastDetectionTime = 0;
+        const DETECTION_INTERVAL = 33;
+
+        function detectHands() {
+            if (!handLandmarker || !video || video.readyState < 2) return;
+
+            const now = performance.now();
+            if (now - lastDetectionTime < DETECTION_INTERVAL) return;
+            lastDetectionTime = now;
+
+            try {
+                const results = handLandmarker.detectForVideo(video, now);
+                hands = [];
+
+                if (results.landmarks && results.landmarks.length > 0) {
+                    for (const landmarks of results.landmarks) {
+                        const gesture = gestureRecognizer.analyzeHand(landmarks);
+                        if (gesture) {
+                            hands.push(gesture);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('Hand detection error:', e);
+            }
+        }
+
+        function detectFace() {
+            const now = performance.now();
+            if (now - lastFaceDetectionTime < CONFIG.faceDetectionInterval) return;
+            lastFaceDetectionTime = now;
+
+            currentFaceData = faceRecognition.detect(video);
+
+            // Update face indicator
+            const indicator = document.getElementById('face-indicator');
+            const dot = indicator.querySelector('.face-dot');
+            const status = document.getElementById('face-status');
+
+            if (currentFaceData?.detected) {
+                dot.classList.add('active');
+                video.classList.add('face-detected');
+
+                const user = userMemory.getCurrentUser();
+                status.textContent = user ? `${user.name} detected` : 'Face detected';
+            } else {
+                dot.classList.remove('active');
+                video.classList.remove('face-detected');
+                status.textContent = 'No face detected';
+            }
+        }
+
+        function updateUI(response) {
+            document.getElementById('entity-mood').textContent =
+                entity.mood.charAt(0).toUpperCase() + entity.mood.slice(1);
+
+            document.getElementById('memory-count').textContent =
+                `${entity.memory.length} gestures`;
+
+            document.getElementById('memory-fill').style.width =
+                `${(entity.memory.length / CONFIG.memoryCapacity) * 100}%`;
+
+            if (hands.length > 0) {
+                const gesture = hands[0];
+                document.getElementById('gesture-display').textContent =
+                    `Detected: ${gesture.static}${gesture.motion ? ' + ' + gesture.motion : ''}`;
+            } else {
+                document.getElementById('gesture-display').textContent = 'No hand detected';
+            }
+
+            if (response && response.message) {
+                document.getElementById('entity-message').innerHTML =
+                    `<em>"${response.message}"</em>`;
+            }
+
+            const indicator = document.querySelector('.state-indicator');
+            switch (entity.mood) {
+                case 'excited': indicator.style.background = '#ff79c6'; break;
+                case 'playful': indicator.style.background = '#f1fa8c'; break;
+                case 'curious': indicator.style.background = '#8be9fd'; break;
+                case 'learning': indicator.style.background = '#bd93f9'; break;
+                case 'calm': indicator.style.background = '#50fa7b'; break;
+            }
+
+            // Update user info
+            const user = userMemory.getCurrentUser();
+            if (user) {
+                document.getElementById('user-badge').classList.remove('hidden');
+                document.getElementById('user-avatar').textContent = user.name.charAt(0).toUpperCase();
+                document.getElementById('current-user-name').textContent = user.name;
+                document.getElementById('user-visits').textContent =
+                    `Visit #${user.visitCount} • ${user.totalInteractions} interactions`;
+            }
+
+            // Update known users list
+            const allUsers = userMemory.getAllUsers();
+            if (allUsers.length > 0) {
+                document.getElementById('known-users').classList.remove('hidden');
+                const list = document.getElementById('known-user-list');
+                list.innerHTML = allUsers.map(u =>
+                    `<span class="known-user-chip ${u.id === user?.id ? 'current' : ''}">${u.name}</span>`
+                ).join('');
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        let lastResponseTime = 0;
+        let currentResponse = null;
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            detectHands();
+            detectFace();
+
+            let handData = null;
+            let response = currentResponse;
+            const user = userMemory.getCurrentUser();
+
+            if (hands.length > 0) {
+                handData = hands[0];
+
+                const now = performance.now();
+                if (now - lastResponseTime > CONFIG.responseDelay) {
+                    response = entityBrain.process(handData, handData, currentFaceData, user);
+                    if (response) {
+                        currentResponse = response;
+                        lastResponseTime = now;
+                        particleSystem.setFormation(response.shape, response.intensity);
+                    }
+                }
+
+                entity.lastInteraction = now;
+            } else {
+                if (performance.now() - entity.lastInteraction > 3000) {
+                    if (!currentResponse || currentResponse.shape !== 'sphere') {
+                        particleSystem.setFormation('sphere', 0.5);
+                        currentResponse = {
+                            shape: 'sphere',
+                            colorMode: 'cool',
+                            soundMode: 'ambient',
+                            intensity: 0.3
+                        };
+                    }
+                }
+            }
+
+            particleSystem.update(handData, currentFaceData, currentResponse);
+
+            if (audioEngine.initialized) {
+                if (handData) {
+                    audioEngine.update(handData, currentResponse);
+                } else {
+                    audioEngine.silence();
+                }
+            }
+
+            updateUI(currentResponse);
+            updateResonanceVisual();
+
+            if (!handData) {
+                entityParticles.rotation.y += 0.002;
+            }
+
+            entityParticles.material.uniforms.uTime.value = performance.now() * 0.001;
+
+            renderer.render(scene, camera);
+        }
+
+        // User registration flow
+        function showNameModal(existingUser = null) {
+            const modal = document.getElementById('name-modal');
+            const input = document.getElementById('user-name-input');
+
+            if (existingUser) {
+                // Returning user - skip modal
+                userMemory.returnVisit(existingUser);
+                const greeting = entityBrain.getGreeting(existingUser, true);
+                document.getElementById('entity-message').innerHTML = `<em>"${greeting}"</em>`;
+                return Promise.resolve(existingUser);
+            }
+
+            modal.classList.remove('hidden');
+
+            return new Promise(resolve => {
+                const saveBtn = document.getElementById('save-name-btn');
+
+                const handleSave = () => {
+                    const name = input.value.trim() || 'Friend';
+                    const faceDescriptor = faceRecognition.lastFaceDescriptor;
+                    const user = userMemory.createUser(name, faceDescriptor);
+
+                    modal.classList.add('hidden');
+
+                    const greeting = entityBrain.getGreeting(user, false);
+                    document.getElementById('entity-message').innerHTML = `<em>"${greeting}"</em>`;
+
+                    resolve(user);
+                };
+
+                saveBtn.onclick = handleSave;
+                input.onkeypress = (e) => {
+                    if (e.key === 'Enter') handleSave();
+                };
+            });
+        }
+
+        // Start button handler
+        document.getElementById('start-audio').addEventListener('click', async () => {
+            await audioEngine.init();
+            document.getElementById('start-audio').classList.add('hidden');
+            document.getElementById('ui-panel').classList.remove('hidden');
+            document.getElementById('face-indicator').classList.remove('hidden');
+
+            // Check for returning user via face
+            if (currentFaceData?.descriptor) {
+                const recognizedUser = userMemory.recognizeUser(currentFaceData.descriptor);
+                await showNameModal(recognizedUser);
+            } else {
+                await showNameModal(null);
+            }
+
+            isInitialized = true;
+        });
+
+        // Initialize everything
+        async function init() {
+            initScene();
+
+            const cameraStarted = await initCamera();
+            if (!cameraStarted) return;
+
+            await Promise.all([
+                initHandTracking(),
+                faceRecognition.init()
+            ]);
+
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('start-audio').classList.remove('hidden');
+
+            // Start detecting face immediately
+            const faceCheckInterval = setInterval(() => {
+                currentFaceData = faceRecognition.detect(video);
+                if (currentFaceData?.detected) {
+                    // Check if we recognize this face
+                    const recognized = userMemory.recognizeUser(currentFaceData.descriptor);
+                    if (recognized) {
+                        console.log('Recognized returning user:', recognized.name);
+                    }
+                }
+            }, 500);
+
+            animate();
+        }
+
+        init();
+    </script>
+</body>
+</html>
