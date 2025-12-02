@@ -915,44 +915,110 @@
         // ════════════════════════════════════════════════════════════════
         class CollectiveLearningSystem {
             constructor() {
-                this.learnedGestures = new Map(); // gesture -> { count, lastSeen, responses }
-                this.gestureSequences = [];       // Recent gesture sequences for pattern learning
-                this.reproductionQueue = [];      // Queue of gestures to reproduce
-                this.isReproducing = false;
-                this.reproductionInterval = null;
+                this.learnedGestures = new Map();      // gesture -> { count, lastSeen, users, contexts }
+                this.gestureSequences = [];            // All gesture sequences (up to 10,000)
+                this.transitionMatrix = new Map();     // gesture -> Map(nextGesture -> count)
+                this.userPatterns = new Map();         // userName -> { gestures[], preferences }
+                this.timePatterns = new Map();         // hour -> gesture frequency
+                this.reproductionQueue = [];
                 this.lastReproductionTime = 0;
-                this.confidenceThreshold = 5;     // Min times seen to "know" a gesture
+                this.confidenceThreshold = 5;
+                this.predictions = [];                 // Recent predictions for accuracy tracking
+                this.predictionAccuracy = 0;
             }
 
-            // Learn from a gesture (local or remote)
-            learn(gesture, userName, isLocal = true) {
+            // Learn from a gesture with full context
+            learn(gesture, userName, isLocal = true, context = {}) {
                 const existing = this.learnedGestures.get(gesture) || {
                     count: 0,
                     lastSeen: 0,
                     users: new Set(),
-                    responses: []
+                    contexts: [],
+                    timeDistribution: new Array(24).fill(0),
+                    avgDuration: 0,
+                    followedBy: new Map(),
+                    precededBy: new Map()
                 };
 
                 existing.count++;
                 existing.lastSeen = Date.now();
                 existing.users.add(userName);
 
+                // Track time distribution
+                const hour = new Date().getHours();
+                existing.timeDistribution[hour]++;
+
+                // Store context
+                existing.contexts.push({
+                    time: Date.now(),
+                    userName,
+                    expression: context.expression,
+                    mood: context.mood,
+                    energy: context.energy
+                });
+
+                // Keep only last 100 contexts per gesture
+                if (existing.contexts.length > 100) {
+                    existing.contexts.shift();
+                }
+
                 this.learnedGestures.set(gesture, existing);
 
-                // Track sequences for pattern recognition
+                // Track sequence and transitions
+                const prevGesture = this.gestureSequences.length > 0
+                    ? this.gestureSequences[this.gestureSequences.length - 1].gesture
+                    : null;
+
                 this.gestureSequences.push({
                     gesture,
                     userName,
                     time: Date.now(),
-                    isLocal
+                    isLocal,
+                    hour,
+                    context
                 });
 
-                // Keep only last 100 gestures in sequence
-                if (this.gestureSequences.length > 100) {
+                // Keep up to 10,000 gestures
+                if (this.gestureSequences.length > 10000) {
                     this.gestureSequences.shift();
                 }
 
-                // Check if entity should try to reproduce
+                // Update transition matrix (Markov chain)
+                if (prevGesture) {
+                    if (!this.transitionMatrix.has(prevGesture)) {
+                        this.transitionMatrix.set(prevGesture, new Map());
+                    }
+                    const transitions = this.transitionMatrix.get(prevGesture);
+                    transitions.set(gesture, (transitions.get(gesture) || 0) + 1);
+
+                    // Update precededBy/followedBy
+                    existing.precededBy.set(prevGesture, (existing.precededBy.get(prevGesture) || 0) + 1);
+
+                    const prevData = this.learnedGestures.get(prevGesture);
+                    if (prevData) {
+                        prevData.followedBy.set(gesture, (prevData.followedBy.get(gesture) || 0) + 1);
+                    }
+                }
+
+                // Update user patterns
+                if (!this.userPatterns.has(userName)) {
+                    this.userPatterns.set(userName, {
+                        gestures: [],
+                        favoriteGestures: new Map(),
+                        sequencePatterns: []
+                    });
+                }
+                const userPattern = this.userPatterns.get(userName);
+                userPattern.gestures.push({ gesture, time: Date.now() });
+                userPattern.favoriteGestures.set(gesture,
+                    (userPattern.favoriteGestures.get(gesture) || 0) + 1);
+
+                // Keep user history manageable
+                if (userPattern.gestures.length > 500) {
+                    userPattern.gestures.shift();
+                }
+
+                // Check if entity should reproduce
                 if (!isLocal && existing.count >= this.confidenceThreshold) {
                     this.queueReproduction(gesture);
                 }
@@ -960,16 +1026,305 @@
                 return existing;
             }
 
-            // Queue a gesture for the entity to reproduce
+            // ════════════════════════════════════════════════════════════════
+            // PREDICTION SYSTEM
+            // ════════════════════════════════════════════════════════════════
+
+            // Predict next gesture based on multiple factors
+            predictNextGesture(currentContext = {}) {
+                const predictions = [];
+
+                // 1. Markov chain prediction (based on last gesture)
+                const markovPred = this.predictFromTransitions();
+                if (markovPred) predictions.push({ ...markovPred, source: 'markov' });
+
+                // 2. Time-based prediction
+                const timePred = this.predictFromTime();
+                if (timePred) predictions.push({ ...timePred, source: 'time' });
+
+                // 3. User pattern prediction
+                const userPred = this.predictFromUserPatterns(currentContext.userName);
+                if (userPred) predictions.push({ ...userPred, source: 'user' });
+
+                // 4. Frequency-based prediction
+                const freqPred = this.predictFromFrequency();
+                if (freqPred) predictions.push({ ...freqPred, source: 'frequency' });
+
+                // 5. Sequence pattern prediction
+                const seqPred = this.predictFromSequencePatterns();
+                if (seqPred) predictions.push({ ...seqPred, source: 'sequence' });
+
+                // 6. Context-based prediction (expression, mood)
+                const contextPred = this.predictFromContext(currentContext);
+                if (contextPred) predictions.push({ ...contextPred, source: 'context' });
+
+                // Combine predictions with weighted voting
+                return this.combinePredictions(predictions);
+            }
+
+            // Markov chain: what usually follows the last gesture?
+            predictFromTransitions() {
+                if (this.gestureSequences.length === 0) return null;
+
+                const lastGesture = this.gestureSequences[this.gestureSequences.length - 1].gesture;
+                const transitions = this.transitionMatrix.get(lastGesture);
+
+                if (!transitions || transitions.size === 0) return null;
+
+                let maxCount = 0;
+                let prediction = null;
+                let total = 0;
+
+                transitions.forEach((count, gesture) => {
+                    total += count;
+                    if (count > maxCount) {
+                        maxCount = count;
+                        prediction = gesture;
+                    }
+                });
+
+                if (!prediction) return null;
+
+                return {
+                    gesture: prediction,
+                    confidence: maxCount / total,
+                    weight: 0.35  // Markov is very reliable
+                };
+            }
+
+            // What gestures are common at this time of day?
+            predictFromTime() {
+                const hour = new Date().getHours();
+                let bestGesture = null;
+                let maxScore = 0;
+
+                this.learnedGestures.forEach((data, gesture) => {
+                    const hourCount = data.timeDistribution[hour];
+                    const totalCount = data.count;
+                    if (totalCount > 0) {
+                        const score = hourCount / totalCount * data.count;
+                        if (score > maxScore) {
+                            maxScore = score;
+                            bestGesture = gesture;
+                        }
+                    }
+                });
+
+                if (!bestGesture) return null;
+
+                const data = this.learnedGestures.get(bestGesture);
+                const hourRatio = data.timeDistribution[hour] / data.count;
+
+                return {
+                    gesture: bestGesture,
+                    confidence: hourRatio,
+                    weight: 0.1
+                };
+            }
+
+            // What does this user usually do?
+            predictFromUserPatterns(userName) {
+                if (!userName) return null;
+
+                const pattern = this.userPatterns.get(userName);
+                if (!pattern || pattern.favoriteGestures.size === 0) return null;
+
+                let maxCount = 0;
+                let favorite = null;
+
+                pattern.favoriteGestures.forEach((count, gesture) => {
+                    if (count > maxCount) {
+                        maxCount = count;
+                        favorite = gesture;
+                    }
+                });
+
+                if (!favorite) return null;
+
+                const totalGestures = pattern.gestures.length;
+                return {
+                    gesture: favorite,
+                    confidence: maxCount / totalGestures,
+                    weight: 0.2
+                };
+            }
+
+            // What's the most common gesture overall?
+            predictFromFrequency() {
+                let maxCount = 0;
+                let mostCommon = null;
+                let total = 0;
+
+                this.learnedGestures.forEach((data, gesture) => {
+                    total += data.count;
+                    if (data.count > maxCount) {
+                        maxCount = data.count;
+                        mostCommon = gesture;
+                    }
+                });
+
+                if (!mostCommon || total === 0) return null;
+
+                return {
+                    gesture: mostCommon,
+                    confidence: maxCount / total,
+                    weight: 0.15
+                };
+            }
+
+            // Look for repeating sequences (e.g., peace -> fist -> peace often)
+            predictFromSequencePatterns() {
+                if (this.gestureSequences.length < 3) return null;
+
+                const recent = this.gestureSequences.slice(-50);
+                const lastTwo = recent.slice(-2).map(g => g.gesture);
+
+                if (lastTwo.length < 2) return null;
+
+                // Find what usually follows this 2-gesture sequence
+                const sequenceKey = lastTwo.join('->');
+                const followCounts = new Map();
+
+                for (let i = 0; i < recent.length - 2; i++) {
+                    const seq = recent[i].gesture + '->' + recent[i + 1].gesture;
+                    if (seq === sequenceKey) {
+                        const next = recent[i + 2].gesture;
+                        followCounts.set(next, (followCounts.get(next) || 0) + 1);
+                    }
+                }
+
+                if (followCounts.size === 0) return null;
+
+                let maxCount = 0;
+                let prediction = null;
+                let total = 0;
+
+                followCounts.forEach((count, gesture) => {
+                    total += count;
+                    if (count > maxCount) {
+                        maxCount = count;
+                        prediction = gesture;
+                    }
+                });
+
+                if (!prediction) return null;
+
+                return {
+                    gesture: prediction,
+                    confidence: maxCount / total,
+                    weight: 0.25
+                };
+            }
+
+            // What gestures correlate with current expression/mood?
+            predictFromContext(context) {
+                if (!context.expression && !context.mood) return null;
+
+                const gestureCounts = new Map();
+                let total = 0;
+
+                this.gestureSequences.forEach(seq => {
+                    const matchesExpr = !context.expression ||
+                        seq.context?.expression === context.expression;
+                    const matchesMood = !context.mood ||
+                        seq.context?.mood === context.mood;
+
+                    if (matchesExpr || matchesMood) {
+                        gestureCounts.set(seq.gesture,
+                            (gestureCounts.get(seq.gesture) || 0) + 1);
+                        total++;
+                    }
+                });
+
+                if (gestureCounts.size === 0 || total === 0) return null;
+
+                let maxCount = 0;
+                let prediction = null;
+
+                gestureCounts.forEach((count, gesture) => {
+                    if (count > maxCount) {
+                        maxCount = count;
+                        prediction = gesture;
+                    }
+                });
+
+                if (!prediction) return null;
+
+                return {
+                    gesture: prediction,
+                    confidence: maxCount / total,
+                    weight: 0.15
+                };
+            }
+
+            // Combine all predictions with weighted voting
+            combinePredictions(predictions) {
+                if (predictions.length === 0) return null;
+
+                const scores = new Map();
+
+                predictions.forEach(pred => {
+                    const score = pred.confidence * pred.weight;
+                    scores.set(pred.gesture,
+                        (scores.get(pred.gesture) || 0) + score);
+                });
+
+                let bestGesture = null;
+                let bestScore = 0;
+                let totalWeight = predictions.reduce((sum, p) => sum + p.weight, 0);
+
+                scores.forEach((score, gesture) => {
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestGesture = gesture;
+                    }
+                });
+
+                if (!bestGesture) return null;
+
+                // Normalize confidence
+                const confidence = bestScore / totalWeight;
+
+                // Get contributing sources
+                const sources = predictions
+                    .filter(p => p.gesture === bestGesture)
+                    .map(p => p.source);
+
+                return {
+                    gesture: bestGesture,
+                    confidence,
+                    sources,
+                    allPredictions: predictions
+                };
+            }
+
+            // Track prediction accuracy
+            recordPredictionResult(predicted, actual) {
+                const correct = predicted === actual;
+                this.predictions.push({ predicted, actual, correct, time: Date.now() });
+
+                // Keep last 100 predictions
+                if (this.predictions.length > 100) {
+                    this.predictions.shift();
+                }
+
+                // Calculate accuracy
+                const correct_count = this.predictions.filter(p => p.correct).length;
+                this.predictionAccuracy = correct_count / this.predictions.length;
+
+                return this.predictionAccuracy;
+            }
+
+            // ════════════════════════════════════════════════════════════════
+            // ORIGINAL METHODS (updated)
+            // ════════════════════════════════════════════════════════════════
+
             queueReproduction(gesture) {
-                // Don't queue if already in queue or recently reproduced
                 if (this.reproductionQueue.includes(gesture)) return;
                 if (Date.now() - this.lastReproductionTime < 5000) return;
-
                 this.reproductionQueue.push(gesture);
             }
 
-            // Get the next gesture to reproduce (called by animation loop)
             getNextReproduction() {
                 if (this.reproductionQueue.length === 0) return null;
                 if (Date.now() - this.lastReproductionTime < 8000) return null;
@@ -979,7 +1334,6 @@
                 return gesture;
             }
 
-            // Get the shape for a gesture (for reproduction)
             getShapeForGesture(gesture) {
                 const gestureShapes = {
                     'open_palm': 'explosion',
@@ -996,14 +1350,12 @@
                 return gestureShapes[gesture] || 'flow';
             }
 
-            // Get confidence level for a gesture (0-1)
             getConfidence(gesture) {
                 const data = this.learnedGestures.get(gesture);
                 if (!data) return 0;
-                return Math.min(1, data.count / 20); // Max confidence at 20 occurrences
+                return Math.min(1, data.count / 50); // Max confidence at 50 occurrences (was 20)
             }
 
-            // Get most learned gestures
             getMostLearned(limit = 5) {
                 return Array.from(this.learnedGestures.entries())
                     .sort((a, b) => b[1].count - a[1].count)
@@ -1016,42 +1368,32 @@
                     }));
             }
 
-            // Get recent patterns (sequences that repeat)
-            getRecentPatterns() {
-                const patterns = [];
-                const recent = this.gestureSequences.slice(-20);
-
-                for (let i = 0; i < recent.length - 1; i++) {
-                    for (let j = i + 1; j < recent.length; j++) {
-                        if (recent[i].gesture === recent[j].gesture) {
-                            patterns.push(recent[i].gesture);
-                        }
-                    }
-                }
-
-                return [...new Set(patterns)];
-            }
-
-            // Combine influences from all online users
-            getCombinedMood(otherUsersGestures) {
-                if (otherUsersGestures.length === 0) return null;
-
-                const moods = otherUsersGestures.map(u => u.mood);
-                const moodCounts = {};
-                moods.forEach(m => moodCounts[m] = (moodCounts[m] || 0) + 1);
-
-                // Return most common mood
-                return Object.entries(moodCounts)
-                    .sort((a, b) => b[1] - a[1])[0]?.[0] || 'curious';
-            }
-
-            // Get collective energy level based on activity
             getCollectiveEnergy() {
                 const recentActivity = this.gestureSequences.filter(
                     g => Date.now() - g.time < 10000
                 ).length;
-
                 return Math.min(1, recentActivity / 10);
+            }
+
+            getCombinedMood(otherUsersGestures) {
+                if (otherUsersGestures.length === 0) return null;
+                const moods = otherUsersGestures.map(u => u.mood);
+                const moodCounts = {};
+                moods.forEach(m => moodCounts[m] = (moodCounts[m] || 0) + 1);
+                return Object.entries(moodCounts)
+                    .sort((a, b) => b[1] - a[1])[0]?.[0] || 'curious';
+            }
+
+            // Get statistics about learning
+            getStats() {
+                return {
+                    totalGestures: this.gestureSequences.length,
+                    uniqueGestures: this.learnedGestures.size,
+                    uniqueUsers: new Set(this.gestureSequences.map(g => g.userName)).size,
+                    predictionAccuracy: this.predictionAccuracy,
+                    mostCommon: this.getMostLearned(3),
+                    recentPredictions: this.predictions.slice(-5)
+                };
             }
         }
 
@@ -1065,11 +1407,13 @@
             particleSize: 2.5,
             handInfluenceRadius: 0.4,
             learningRate: 0.1,
-            memoryCapacity: 1000,           // Increased from 50 to 1000
-            sharedMemoryCapacity: 1000,     // Firebase shared memory
+            memoryCapacity: 10000,          // Increased to 10,000 gestures
+            sharedMemoryCapacity: 10000,    // Firebase shared memory
             responseDelay: 800,
             faceDetectionInterval: 500,
-            faceEmbeddingSize: 128
+            faceEmbeddingSize: 128,
+            predictionWindowSize: 50,       // Look at last N gestures for prediction
+            minPredictionConfidence: 0.3    // Minimum confidence to make prediction
         };
 
         // ════════════════════════════════════════════════════════════════
@@ -2944,12 +3288,34 @@
                         // Record gesture to shared memory and collective learning
                         const gestureKey = handData.static + (handData.motion ? '_' + handData.motion : '');
 
+                        // Build context for learning
+                        const learnContext = {
+                            expression: currentFaceData?.expression?.name,
+                            mood: entity.mood,
+                            energy: collectiveLearning.getCollectiveEnergy()
+                        };
+
+                        // Check if prediction was correct
+                        if (collectiveLearning._lastPrediction) {
+                            collectiveLearning.recordPredictionResult(
+                                collectiveLearning._lastPrediction.gesture,
+                                gestureKey
+                            );
+                        }
+
                         if (sharedMemory.initialized && user) {
                             sharedMemory.recordGesture(gestureKey, user.name, handData.palmCenter);
                         }
 
-                        // Local learning
-                        collectiveLearning.learn(gestureKey, user?.name || 'Anonymous', true);
+                        // Learn with full context
+                        collectiveLearning.learn(gestureKey, user?.name || 'Anonymous', true, learnContext);
+
+                        // Make prediction for next gesture
+                        collectiveLearning._lastPrediction = collectiveLearning.predictNextGesture({
+                            userName: user?.name,
+                            expression: currentFaceData?.expression?.name,
+                            mood: entity.mood
+                        });
                     }
                 }
 
@@ -2985,8 +3351,9 @@
                 }
             }
 
-            // Entity reproduces learned signs when idle
+            // Entity predicts and shows anticipated gestures when idle
             if (hands.length === 0 && performance.now() - entity.lastInteraction > 5000) {
+                // First try to reproduce learned signs
                 const reproduction = collectiveLearning.getNextReproduction();
                 if (reproduction) {
                     const shape = collectiveLearning.getShapeForGesture(reproduction);
@@ -2999,6 +3366,33 @@
                         soundMode: 'melodic',
                         intensity: 0.5 + confidence * 0.3,
                         message: `I learned "${reproduction.replace('_', ' ')}"! Let me show you...`
+                    };
+
+                    document.getElementById('entity-message').innerHTML =
+                        `<em>"${currentResponse.message}"</em>`;
+
+                    entity.lastInteraction = performance.now();
+                    lastResponseTime = performance.now();
+                }
+                // Otherwise, show prediction
+                else if (collectiveLearning._lastPrediction &&
+                         collectiveLearning._lastPrediction.confidence > CONFIG.minPredictionConfidence) {
+                    const prediction = collectiveLearning._lastPrediction;
+                    const shape = collectiveLearning.getShapeForGesture(prediction.gesture);
+
+                    // Show prediction with lower intensity (anticipation)
+                    particleSystem.setFormation(shape, 0.3 + prediction.confidence * 0.3);
+
+                    const stats = collectiveLearning.getStats();
+                    const accuracy = Math.round(stats.predictionAccuracy * 100);
+                    const sources = prediction.sources?.join(', ') || 'patterns';
+
+                    currentResponse = {
+                        shape,
+                        colorMode: 'cool',
+                        soundMode: 'ambient',
+                        intensity: 0.3 + prediction.confidence * 0.2,
+                        message: `I sense "${prediction.gesture.replace('_', ' ')}" coming... (${Math.round(prediction.confidence * 100)}% sure, ${accuracy}% accuracy)`
                     };
 
                     document.getElementById('entity-message').innerHTML =
@@ -3137,8 +3531,11 @@
 
             // Set up collective learning from other users
             multiplayer.onOtherUserGesture((userName, gesture, mood) => {
-                // Learn from other users' gestures
-                collectiveLearning.learn(gesture, userName, false);
+                // Learn from other users' gestures with context
+                collectiveLearning.learn(gesture, userName, false, {
+                    mood: mood,
+                    energy: collectiveLearning.getCollectiveEnergy()
+                });
 
                 // Show notification
                 multiplayer.showGlobalActivity(`${userName} is making: ${gesture.replace('_', ' ')}`);
