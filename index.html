@@ -1767,65 +1767,361 @@
             }
 
             getExpression(blendshapes) {
-                if (!blendshapes || !blendshapes.categories) return { name: 'neutral', intensity: 0, raw: {} };
+                if (!blendshapes || !blendshapes.categories) return { name: 'neutral', intensity: 0, raw: {}, details: {} };
 
                 const shapes = {};
                 for (const shape of blendshapes.categories) {
                     shapes[shape.categoryName] = shape.score;
                 }
 
-                // Store raw values for detailed reactions
+                // Comprehensive raw values - eyes
                 const raw = {
-                    smile: Math.max(shapes.mouthSmileLeft || 0, shapes.mouthSmileRight || 0),
-                    browUp: Math.max(shapes.browInnerUp || 0, shapes.browOuterUpLeft || 0, shapes.browOuterUpRight || 0),
-                    browDown: Math.max(shapes.browDownLeft || 0, shapes.browDownRight || 0),
-                    eyeWide: Math.max(shapes.eyeWideLeft || 0, shapes.eyeWideRight || 0),
-                    eyeSquint: Math.max(shapes.eyeSquintLeft || 0, shapes.eyeSquintRight || 0),
+                    // Eye features
+                    eyeWideLeft: shapes.eyeWideLeft || 0,
+                    eyeWideRight: shapes.eyeWideRight || 0,
+                    eyeSquintLeft: shapes.eyeSquintLeft || 0,
+                    eyeSquintRight: shapes.eyeSquintRight || 0,
+                    eyeBlinkLeft: shapes.eyeBlinkLeft || 0,
+                    eyeBlinkRight: shapes.eyeBlinkRight || 0,
+                    eyeLookUpLeft: shapes.eyeLookUpLeft || 0,
+                    eyeLookUpRight: shapes.eyeLookUpRight || 0,
+                    eyeLookDownLeft: shapes.eyeLookDownLeft || 0,
+                    eyeLookDownRight: shapes.eyeLookDownRight || 0,
+                    eyeLookInLeft: shapes.eyeLookInLeft || 0,
+                    eyeLookInRight: shapes.eyeLookInRight || 0,
+                    eyeLookOutLeft: shapes.eyeLookOutLeft || 0,
+                    eyeLookOutRight: shapes.eyeLookOutRight || 0,
+
+                    // Brow features
+                    browInnerUp: shapes.browInnerUp || 0,
+                    browOuterUpLeft: shapes.browOuterUpLeft || 0,
+                    browOuterUpRight: shapes.browOuterUpRight || 0,
+                    browDownLeft: shapes.browDownLeft || 0,
+                    browDownRight: shapes.browDownRight || 0,
+
+                    // Mouth features
+                    mouthSmileLeft: shapes.mouthSmileLeft || 0,
+                    mouthSmileRight: shapes.mouthSmileRight || 0,
+                    mouthFrownLeft: shapes.mouthFrownLeft || 0,
+                    mouthFrownRight: shapes.mouthFrownRight || 0,
                     mouthOpen: shapes.jawOpen || 0,
                     mouthPucker: shapes.mouthPucker || 0,
+                    mouthLeft: shapes.mouthLeft || 0,
+                    mouthRight: shapes.mouthRight || 0,
+                    mouthRollLower: shapes.mouthRollLower || 0,
+                    mouthRollUpper: shapes.mouthRollUpper || 0,
+                    mouthShrugLower: shapes.mouthShrugLower || 0,
+                    mouthShrugUpper: shapes.mouthShrugUpper || 0,
+                    mouthClose: shapes.mouthClose || 0,
+                    mouthFunnel: shapes.mouthFunnel || 0,
+                    mouthDimpleLeft: shapes.mouthDimpleLeft || 0,
+                    mouthDimpleRight: shapes.mouthDimpleRight || 0,
+                    mouthStretchLeft: shapes.mouthStretchLeft || 0,
+                    mouthStretchRight: shapes.mouthStretchRight || 0,
+                    mouthPressLeft: shapes.mouthPressLeft || 0,
+                    mouthPressRight: shapes.mouthPressRight || 0,
+                    mouthUpperUpLeft: shapes.mouthUpperUpLeft || 0,
+                    mouthUpperUpRight: shapes.mouthUpperUpRight || 0,
+                    mouthLowerDownLeft: shapes.mouthLowerDownLeft || 0,
+                    mouthLowerDownRight: shapes.mouthLowerDownRight || 0,
+
+                    // Other features
                     cheekPuff: shapes.cheekPuff || 0,
+                    cheekSquintLeft: shapes.cheekSquintLeft || 0,
+                    cheekSquintRight: shapes.cheekSquintRight || 0,
                     tongueOut: shapes.tongueOut || 0,
-                    eyeLookUp: Math.max(shapes.eyeLookUpLeft || 0, shapes.eyeLookUpRight || 0),
-                    eyeLookDown: Math.max(shapes.eyeLookDownLeft || 0, shapes.eyeLookDownRight || 0),
-                    headTilt: shapes.headTilt || 0
+                    jawLeft: shapes.jawLeft || 0,
+                    jawRight: shapes.jawRight || 0,
+                    jawForward: shapes.jawForward || 0,
+                    noseSneerLeft: shapes.noseSneerLeft || 0,
+                    noseSneerRight: shapes.noseSneerRight || 0
                 };
 
-                // Detect primary expression with lower thresholds
-                let expression = 'neutral';
-                let intensity = 0;
+                // Calculate combined features for expression detection
+                const combined = {
+                    // Eyes combined
+                    eyeWide: Math.max(raw.eyeWideLeft, raw.eyeWideRight),
+                    eyeSquint: Math.max(raw.eyeSquintLeft, raw.eyeSquintRight),
+                    eyesClosed: Math.min(raw.eyeBlinkLeft, raw.eyeBlinkRight),
+                    eyeWink: Math.abs(raw.eyeBlinkLeft - raw.eyeBlinkRight),
+                    eyeLookUp: Math.max(raw.eyeLookUpLeft, raw.eyeLookUpRight),
+                    eyeLookDown: Math.max(raw.eyeLookDownLeft, raw.eyeLookDownRight),
+                    eyeLookSide: Math.max(raw.eyeLookInLeft, raw.eyeLookInRight, raw.eyeLookOutLeft, raw.eyeLookOutRight),
 
-                // Happy (smiling) - lower threshold
-                if (raw.smile > 0.2) {
-                    expression = 'happy';
-                    intensity = raw.smile;
-                }
-                // Surprised (wide eyes + raised brows)
-                else if (raw.eyeWide > 0.15 || raw.browUp > 0.2) {
-                    expression = 'surprised';
-                    intensity = Math.max(raw.eyeWide, raw.browUp);
-                }
-                // Focused/thinking (brows down, squinting)
-                else if (raw.browDown > 0.15 || raw.eyeSquint > 0.2) {
-                    expression = 'focused';
-                    intensity = Math.max(raw.browDown, raw.eyeSquint);
-                }
-                // Amazed (mouth open)
-                else if (raw.mouthOpen > 0.3) {
-                    expression = 'amazed';
-                    intensity = raw.mouthOpen;
-                }
-                // Playful (tongue out or puckered lips)
-                else if (raw.tongueOut > 0.3 || raw.mouthPucker > 0.3) {
-                    expression = 'playful';
-                    intensity = Math.max(raw.tongueOut, raw.mouthPucker);
-                }
-                // Puffed cheeks
-                else if (raw.cheekPuff > 0.3) {
-                    expression = 'silly';
-                    intensity = raw.cheekPuff;
+                    // Brows combined
+                    browUp: Math.max(raw.browInnerUp, raw.browOuterUpLeft, raw.browOuterUpRight),
+                    browDown: Math.max(raw.browDownLeft, raw.browDownRight),
+                    browRaiseAsymmetry: Math.abs((raw.browOuterUpLeft + raw.browInnerUp/2) - (raw.browOuterUpRight + raw.browInnerUp/2)),
+
+                    // Mouth combined
+                    smile: Math.max(raw.mouthSmileLeft, raw.mouthSmileRight),
+                    smileSymmetric: Math.min(raw.mouthSmileLeft, raw.mouthSmileRight),
+                    smileAsymmetry: Math.abs(raw.mouthSmileLeft - raw.mouthSmileRight),
+                    frown: Math.max(raw.mouthFrownLeft, raw.mouthFrownRight),
+                    mouthSideways: Math.max(raw.mouthLeft, raw.mouthRight),
+                    lipPress: Math.max(raw.mouthPressLeft, raw.mouthPressRight),
+                    lipRoll: Math.max(raw.mouthRollLower, raw.mouthRollUpper),
+                    mouthStretch: Math.max(raw.mouthStretchLeft, raw.mouthStretchRight),
+                    dimples: Math.max(raw.mouthDimpleLeft, raw.mouthDimpleRight),
+                    noseSneer: Math.max(raw.noseSneerLeft, raw.noseSneerRight),
+                    cheekSquint: Math.max(raw.cheekSquintLeft, raw.cheekSquintRight)
+                };
+
+                // Expression patterns combining eye + mouth features
+                // Each pattern has a score calculation and threshold
+                const expressionPatterns = [
+                    // GENUINE JOY - Eyes squint (Duchenne smile) + strong symmetric smile + cheek raise
+                    {
+                        name: 'genuine_joy',
+                        score: () => {
+                            const eyeCrinkle = combined.eyeSquint + combined.cheekSquint;
+                            const mouthSmile = combined.smileSymmetric;
+                            const dimpleBonus = combined.dimples * 0.3;
+                            return (eyeCrinkle * 0.5 + mouthSmile * 0.5 + dimpleBonus) *
+                                   (1 - combined.smileAsymmetry * 0.5); // Penalize asymmetry
+                        },
+                        threshold: 0.25,
+                        color: { r: 1.0, g: 0.9, b: 0.3 } // Warm gold
+                    },
+
+                    // POLITE SMILE - Smile without eye involvement
+                    {
+                        name: 'polite_smile',
+                        score: () => {
+                            const mouthSmile = combined.smile;
+                            const lackOfEyeInvolvement = 1 - combined.eyeSquint;
+                            return mouthSmile * lackOfEyeInvolvement * 0.8;
+                        },
+                        threshold: 0.2,
+                        color: { r: 0.8, g: 0.8, b: 0.5 } // Pale yellow
+                    },
+
+                    // SMIRK - Asymmetric smile, possibly one brow raised
+                    {
+                        name: 'smirk',
+                        score: () => {
+                            const asymmetricSmile = combined.smileAsymmetry;
+                            const mouthSide = combined.mouthSideways;
+                            return asymmetricSmile * 0.6 + mouthSide * 0.4;
+                        },
+                        threshold: 0.15,
+                        color: { r: 0.9, g: 0.6, b: 0.2 } // Orange
+                    },
+
+                    // SURPRISE - Wide eyes + raised brows + open mouth
+                    {
+                        name: 'surprised',
+                        score: () => {
+                            const eyeComponent = combined.eyeWide * 0.35;
+                            const browComponent = combined.browUp * 0.35;
+                            const mouthComponent = raw.mouthOpen * 0.3;
+                            return eyeComponent + browComponent + mouthComponent;
+                        },
+                        threshold: 0.2,
+                        color: { r: 0.3, g: 0.8, b: 1.0 } // Cyan
+                    },
+
+                    // AMAZED - Surprise but with more mouth open, sustained
+                    {
+                        name: 'amazed',
+                        score: () => {
+                            const eyeWide = combined.eyeWide;
+                            const mouthWideOpen = raw.mouthOpen;
+                            return (eyeWide * 0.4 + mouthWideOpen * 0.6) * (mouthWideOpen > 0.3 ? 1.2 : 0.8);
+                        },
+                        threshold: 0.3,
+                        color: { r: 0.5, g: 0.3, b: 1.0 } // Purple
+                    },
+
+                    // SKEPTICAL - One brow raised, slight frown or pressed lips
+                    {
+                        name: 'skeptical',
+                        score: () => {
+                            const browAsymmetry = combined.browRaiseAsymmetry;
+                            const lipPress = combined.lipPress;
+                            const slightFrown = combined.frown * 0.5;
+                            return browAsymmetry * 0.5 + lipPress * 0.3 + slightFrown * 0.2;
+                        },
+                        threshold: 0.12,
+                        color: { r: 0.6, g: 0.5, b: 0.7 } // Muted purple
+                    },
+
+                    // THINKING/CONTEMPLATIVE - Eyes looking up or to side + pressed lips or slight pout
+                    {
+                        name: 'thinking',
+                        score: () => {
+                            const eyeDirection = Math.max(combined.eyeLookUp, combined.eyeLookSide);
+                            const mouthThinking = Math.max(combined.lipPress, raw.mouthPucker * 0.5, combined.lipRoll);
+                            const browFurrow = combined.browDown * 0.3;
+                            return eyeDirection * 0.4 + mouthThinking * 0.4 + browFurrow * 0.2;
+                        },
+                        threshold: 0.15,
+                        color: { r: 0.4, g: 0.6, b: 0.8 } // Steel blue
+                    },
+
+                    // FOCUSED/CONCENTRATED - Brows down + squinting + possibly lip bite
+                    {
+                        name: 'focused',
+                        score: () => {
+                            const browDown = combined.browDown;
+                            const eyeSquint = combined.eyeSquint;
+                            const lipRoll = combined.lipRoll * 0.3;
+                            return browDown * 0.4 + eyeSquint * 0.4 + lipRoll * 0.2;
+                        },
+                        threshold: 0.15,
+                        color: { r: 0.3, g: 0.5, b: 0.7 } // Dark blue
+                    },
+
+                    // DISGUST - Nose sneer + upper lip raise + squint
+                    {
+                        name: 'disgusted',
+                        score: () => {
+                            const noseSneer = combined.noseSneer;
+                            const upperLip = Math.max(raw.mouthUpperUpLeft, raw.mouthUpperUpRight);
+                            const eyeSquint = combined.eyeSquint * 0.3;
+                            return noseSneer * 0.4 + upperLip * 0.4 + eyeSquint * 0.2;
+                        },
+                        threshold: 0.2,
+                        color: { r: 0.5, g: 0.6, b: 0.3 } // Olive
+                    },
+
+                    // SAD/UPSET - Frown + inner brow raise + possibly down-turned eyes
+                    {
+                        name: 'sad',
+                        score: () => {
+                            const frown = combined.frown;
+                            const innerBrowUp = raw.browInnerUp;
+                            const eyeDown = combined.eyeLookDown * 0.3;
+                            return frown * 0.4 + innerBrowUp * 0.4 + eyeDown * 0.2;
+                        },
+                        threshold: 0.18,
+                        color: { r: 0.3, g: 0.4, b: 0.6 } // Slate blue
+                    },
+
+                    // PLAYFUL - Tongue out or exaggerated expressions
+                    {
+                        name: 'playful',
+                        score: () => {
+                            const tongueOut = raw.tongueOut;
+                            const pucker = raw.mouthPucker;
+                            const wink = combined.eyeWink;
+                            return tongueOut * 0.5 + pucker * 0.3 + wink * 0.2;
+                        },
+                        threshold: 0.2,
+                        color: { r: 1.0, g: 0.5, b: 0.8 } // Pink
+                    },
+
+                    // SILLY - Puffed cheeks, funny face
+                    {
+                        name: 'silly',
+                        score: () => {
+                            const cheekPuff = raw.cheekPuff;
+                            const funnel = raw.mouthFunnel;
+                            const tongueOut = raw.tongueOut * 0.3;
+                            return cheekPuff * 0.5 + funnel * 0.3 + tongueOut * 0.2;
+                        },
+                        threshold: 0.2,
+                        color: { r: 0.9, g: 0.4, b: 0.9 } // Magenta
+                    },
+
+                    // FLIRTY - Slight smile + one eye more closed (wink-like) + head tilt
+                    {
+                        name: 'flirty',
+                        score: () => {
+                            const subtleSmile = combined.smile * (combined.smile < 0.4 ? 1 : 0.5);
+                            const eyeAsymmetry = combined.eyeWink;
+                            const dimples = combined.dimples * 0.3;
+                            return subtleSmile * 0.4 + eyeAsymmetry * 0.4 + dimples * 0.2;
+                        },
+                        threshold: 0.15,
+                        color: { r: 1.0, g: 0.4, b: 0.5 } // Coral
+                    },
+
+                    // DETERMINED - Firm jaw + focused eyes + pressed lips
+                    {
+                        name: 'determined',
+                        score: () => {
+                            const jawForward = raw.jawForward;
+                            const lipPress = combined.lipPress;
+                            const browDown = combined.browDown;
+                            return jawForward * 0.3 + lipPress * 0.4 + browDown * 0.3;
+                        },
+                        threshold: 0.15,
+                        color: { r: 0.8, g: 0.3, b: 0.2 } // Deep red
+                    },
+
+                    // WORRIED/ANXIOUS - Inner brow up + wide eyes + tight mouth
+                    {
+                        name: 'worried',
+                        score: () => {
+                            const innerBrowUp = raw.browInnerUp;
+                            const eyeWide = combined.eyeWide * 0.5;
+                            const mouthTight = combined.mouthStretch + combined.lipPress;
+                            return innerBrowUp * 0.4 + eyeWide * 0.3 + mouthTight * 0.3;
+                        },
+                        threshold: 0.18,
+                        color: { r: 0.6, g: 0.6, b: 0.4 } // Khaki
+                    },
+
+                    // CONTENT/SERENE - Soft smile + relaxed eyes (slight squint)
+                    {
+                        name: 'content',
+                        score: () => {
+                            const softSmile = combined.smile * (combined.smile < 0.3 ? 1.5 : 0.8);
+                            const relaxedEyes = combined.eyeSquint * (combined.eyeSquint < 0.3 ? 1.2 : 0.6);
+                            const noTension = (1 - combined.browDown) * 0.2;
+                            return softSmile * 0.4 + relaxedEyes * 0.4 + noTension;
+                        },
+                        threshold: 0.15,
+                        color: { r: 0.6, g: 0.9, b: 0.7 } // Mint green
+                    },
+
+                    // CONFUSED - Asymmetric brows + slightly open mouth + head tilt
+                    {
+                        name: 'confused',
+                        score: () => {
+                            const browAsymmetry = combined.browRaiseAsymmetry;
+                            const slightOpen = raw.mouthOpen * (raw.mouthOpen < 0.3 ? 1.5 : 0.5);
+                            const squint = combined.eyeSquint * 0.3;
+                            return browAsymmetry * 0.4 + slightOpen * 0.3 + squint * 0.3;
+                        },
+                        threshold: 0.12,
+                        color: { r: 0.7, g: 0.7, b: 0.5 } // Tan
+                    }
+                ];
+
+                // Find best matching expression
+                let bestExpression = 'neutral';
+                let bestScore = 0;
+                let bestColor = { r: 0.5, g: 0.5, b: 0.5 };
+
+                for (const pattern of expressionPatterns) {
+                    const score = pattern.score();
+                    if (score > pattern.threshold && score > bestScore) {
+                        bestScore = score;
+                        bestExpression = pattern.name;
+                        bestColor = pattern.color;
+                    }
                 }
 
-                return { name: expression, intensity, raw };
+                // Calculate expression details for particle reactions
+                const details = {
+                    valence: combined.smile - combined.frown, // Positive/negative emotion
+                    arousal: (combined.eyeWide + raw.mouthOpen + combined.browUp) / 3, // Energy level
+                    dominance: combined.browDown - raw.browInnerUp, // Assertive vs submissive
+                    openness: raw.mouthOpen + combined.eyeWide - combined.eyeSquint,
+                    warmth: combined.smileSymmetric + combined.dimples - combined.lipPress,
+                    tension: combined.browDown + combined.lipPress + combined.mouthStretch,
+                    color: bestColor
+                };
+
+                return {
+                    name: bestExpression,
+                    intensity: Math.min(bestScore * 1.5, 1), // Normalize to 0-1
+                    raw,
+                    combined,
+                    details
+                };
             }
         }
 
@@ -2730,33 +3026,134 @@
                         if (dist > 0.5 && dist < 2) {
                             let attraction = 0.002 * (1 - dist / 2);
 
-                            // Expression-based modifiers
+                            // Expression-based modifiers using new nuanced system
                             const expr = faceData.expression;
                             if (expr && expr.name !== 'neutral') {
                                 const intensity = expr.intensity || 0.5;
+                                const details = expr.details || {};
 
-                                if (expr.name === 'happy') {
-                                    // Happy: particles expand outward joyfully
-                                    attraction = -0.003 * intensity;
-                                    this.velocities[i3] += (Math.random() - 0.5) * 0.01 * intensity;
-                                    this.velocities[i3 + 1] += Math.random() * 0.01 * intensity; // Float up
-                                } else if (expr.name === 'surprised') {
-                                    // Surprised: particles burst outward
-                                    attraction = -0.005 * intensity;
-                                    this.velocities[i3] += (Math.random() - 0.5) * 0.02 * intensity;
-                                    this.velocities[i3 + 1] += (Math.random() - 0.5) * 0.02 * intensity;
-                                } else if (expr.name === 'focused') {
-                                    // Focused: particles converge tightly
-                                    attraction = 0.006 * intensity;
-                                } else if (expr.name === 'playful' || expr.name === 'silly') {
-                                    // Playful: particles dance chaotically
-                                    this.velocities[i3] += Math.sin(time * 10 + i * 0.1) * 0.01 * intensity;
-                                    this.velocities[i3 + 1] += Math.cos(time * 10 + i * 0.1) * 0.01 * intensity;
-                                } else if (expr.name === 'amazed') {
-                                    // Amazed: particles spiral
-                                    const angle = time * 2 + i * 0.01;
-                                    this.velocities[i3] += Math.cos(angle) * 0.005 * intensity;
-                                    this.velocities[i3 + 1] += Math.sin(angle) * 0.005 * intensity;
+                                // Use valence (positive/negative) and arousal (energy level) for base behavior
+                                const valence = details.valence || 0;
+                                const arousal = details.arousal || 0;
+
+                                switch (expr.name) {
+                                    case 'genuine_joy':
+                                        // Genuine joy: particles expand in warm, flowing waves
+                                        attraction = -0.004 * intensity;
+                                        this.velocities[i3] += (Math.random() - 0.5) * 0.012 * intensity;
+                                        this.velocities[i3 + 1] += Math.random() * 0.015 * intensity;
+                                        this.velocities[i3 + 2] += Math.sin(time * 3 + i * 0.05) * 0.005 * intensity;
+                                        break;
+
+                                    case 'polite_smile':
+                                        // Polite smile: gentle, organized expansion
+                                        attraction = -0.002 * intensity;
+                                        this.velocities[i3 + 1] += 0.003 * intensity;
+                                        break;
+
+                                    case 'smirk':
+                                        // Smirk: asymmetric, cheeky movement
+                                        attraction = 0;
+                                        this.velocities[i3] += Math.sin(time * 4 + i * 0.1) * 0.008 * intensity;
+                                        this.velocities[i3 + 1] += Math.cos(time * 2) * 0.004 * intensity;
+                                        break;
+
+                                    case 'surprised':
+                                        // Surprised: sudden burst outward
+                                        attraction = -0.006 * intensity;
+                                        this.velocities[i3] += (Math.random() - 0.5) * 0.025 * intensity;
+                                        this.velocities[i3 + 1] += (Math.random() - 0.5) * 0.025 * intensity;
+                                        this.velocities[i3 + 2] += (Math.random() - 0.5) * 0.015 * intensity;
+                                        break;
+
+                                    case 'amazed':
+                                        // Amazed: grand spiral outward
+                                        const amazeAngle = time * 2 + i * 0.02;
+                                        attraction = -0.003 * intensity;
+                                        this.velocities[i3] += Math.cos(amazeAngle) * 0.008 * intensity;
+                                        this.velocities[i3 + 1] += Math.sin(amazeAngle) * 0.008 * intensity;
+                                        this.velocities[i3 + 2] += Math.sin(time * 3 + i * 0.01) * 0.004 * intensity;
+                                        break;
+
+                                    case 'skeptical':
+                                        // Skeptical: slow, questioning orbit
+                                        const skeptAngle = time * 0.8 + i * 0.005;
+                                        this.velocities[i3] += Math.cos(skeptAngle) * 0.003 * intensity;
+                                        this.velocities[i3 + 1] -= 0.001 * intensity; // Slight downward drift
+                                        break;
+
+                                    case 'thinking':
+                                        // Thinking: slow upward float, contemplative swirl
+                                        this.velocities[i3 + 1] += 0.004 * intensity;
+                                        const thinkAngle = time * 1.5 + i * 0.01;
+                                        this.velocities[i3] += Math.cos(thinkAngle) * 0.003 * intensity;
+                                        break;
+
+                                    case 'focused':
+                                        // Focused: tight convergence to center
+                                        attraction = 0.008 * intensity;
+                                        break;
+
+                                    case 'disgusted':
+                                        // Disgusted: recoiling, retreating particles
+                                        attraction = -0.005 * intensity;
+                                        this.velocities[i3 + 1] -= 0.004 * intensity;
+                                        this.velocities[i3 + 2] -= 0.006 * intensity;
+                                        break;
+
+                                    case 'sad':
+                                        // Sad: slow downward drift, dispersing
+                                        attraction = -0.002 * intensity;
+                                        this.velocities[i3 + 1] -= 0.008 * intensity;
+                                        this.velocities[i3] += (Math.random() - 0.5) * 0.003 * intensity;
+                                        break;
+
+                                    case 'playful':
+                                        // Playful: bouncy, chaotic dance
+                                        this.velocities[i3] += Math.sin(time * 12 + i * 0.15) * 0.012 * intensity;
+                                        this.velocities[i3 + 1] += Math.cos(time * 10 + i * 0.12) * 0.012 * intensity;
+                                        this.velocities[i3 + 2] += Math.sin(time * 8 + i * 0.1) * 0.008 * intensity;
+                                        break;
+
+                                    case 'silly':
+                                        // Silly: extreme wobble and bounce
+                                        this.velocities[i3] += Math.sin(time * 15 + i * 0.2) * 0.015 * intensity;
+                                        this.velocities[i3 + 1] += Math.abs(Math.sin(time * 8)) * 0.01 * intensity;
+                                        this.velocities[i3 + 2] += Math.cos(time * 12 + i * 0.15) * 0.01 * intensity;
+                                        break;
+
+                                    case 'flirty':
+                                        // Flirty: gentle swaying, subtle sparkle motion
+                                        const flirtAngle = time * 2 + i * 0.03;
+                                        this.velocities[i3] += Math.sin(flirtAngle) * 0.006 * intensity;
+                                        this.velocities[i3 + 1] += Math.cos(time * 3) * 0.004 * intensity;
+                                        break;
+
+                                    case 'determined':
+                                        // Determined: strong forward motion, organized
+                                        attraction = 0.005 * intensity;
+                                        this.velocities[i3 + 2] += 0.006 * intensity;
+                                        break;
+
+                                    case 'worried':
+                                        // Worried: nervous trembling, slight scatter
+                                        this.velocities[i3] += (Math.random() - 0.5) * 0.008 * intensity;
+                                        this.velocities[i3 + 1] += (Math.random() - 0.5) * 0.006 * intensity;
+                                        attraction = 0.003 * intensity;
+                                        break;
+
+                                    case 'content':
+                                        // Content: gentle breathing motion
+                                        const breathe = Math.sin(time * 1.5) * 0.003 * intensity;
+                                        attraction = breathe;
+                                        this.velocities[i3 + 1] += breathe * 0.5;
+                                        break;
+
+                                    case 'confused':
+                                        // Confused: erratic, questioning movement
+                                        this.velocities[i3] += Math.sin(time * 6 + i * 0.3) * 0.006 * intensity;
+                                        this.velocities[i3 + 1] += Math.cos(time * 4 + i * 0.2) * 0.004 * intensity;
+                                        break;
                                 }
                             }
 
@@ -2794,46 +3191,156 @@
                 const colorMode = response?.colorMode || 'cool';
                 const intensity = response?.intensity || 0.5;
 
-                // Check for expression-based color override
+                // Check for expression-based color override using new nuanced system
                 const expr = faceData?.expression;
                 let expressionOverride = false;
 
-                if (expr && expr.name !== 'neutral' && expr.intensity > 0.25) {
+                if (expr && expr.name !== 'neutral' && expr.intensity > 0.2) {
                     expressionOverride = true;
                     const exprIntensity = expr.intensity;
+                    const details = expr.details || {};
+                    const exprColor = details.color || { r: 0.5, g: 0.5, b: 0.5 };
+
+                    // Convert RGB to HSL for more control
+                    const rgbToHsl = (r, g, b) => {
+                        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+                        let h, s, l = (max + min) / 2;
+                        if (max === min) {
+                            h = s = 0;
+                        } else {
+                            const d = max - min;
+                            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+                            switch (max) {
+                                case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+                                case g: h = ((b - r) / d + 2) / 6; break;
+                                case b: h = ((r - g) / d + 4) / 6; break;
+                            }
+                        }
+                        return { h, s, l };
+                    };
+
+                    const baseHsl = rgbToHsl(exprColor.r, exprColor.g, exprColor.b);
 
                     switch (expr.name) {
-                        case 'happy':
-                            // Warm golden/yellow tones
-                            hue = 0.12 + Math.sin(time * 2 + i3 * 0.001) * 0.05;
-                            saturation = 0.9;
-                            lightness = 0.5 + exprIntensity * 0.3;
+                        case 'genuine_joy':
+                            // Warm golden/yellow with sparkle
+                            hue = 0.12 + Math.sin(time * 2 + i3 * 0.001) * 0.03;
+                            saturation = 0.95;
+                            lightness = 0.55 + exprIntensity * 0.25 + Math.sin(time * 4 + i3 * 0.02) * 0.1;
                             break;
-                        case 'surprised':
-                            // Bright white/cyan flash
-                            hue = 0.5 + Math.sin(time * 5) * 0.1;
+
+                        case 'polite_smile':
+                            // Soft warm yellow, less vibrant
+                            hue = 0.14 + Math.sin(time * 1.5 + i3 * 0.001) * 0.02;
                             saturation = 0.6;
-                            lightness = 0.6 + exprIntensity * 0.3;
+                            lightness = 0.55 + exprIntensity * 0.15;
                             break;
-                        case 'focused':
-                            // Deep blue/purple concentrated
-                            hue = 0.7 + Math.sin(time + i3 * 0.002) * 0.05;
+
+                        case 'smirk':
+                            // Orange with playful variation
+                            hue = 0.08 + Math.sin(time * 3 + i3 * 0.002) * 0.04;
                             saturation = 0.85;
-                            lightness = 0.35 + exprIntensity * 0.15;
+                            lightness = 0.5 + exprIntensity * 0.2;
                             break;
+
+                        case 'surprised':
+                            // Bright cyan/white flash
+                            hue = 0.52 + Math.sin(time * 6) * 0.08;
+                            saturation = 0.7 - exprIntensity * 0.3;
+                            lightness = 0.65 + exprIntensity * 0.25;
+                            break;
+
+                        case 'amazed':
+                            // Deep purple with sparkle
+                            hue = 0.75 + Math.sin(time * 3 + i3 * 0.001) * 0.08;
+                            saturation = 0.85;
+                            lightness = 0.5 + Math.sin(time * 8 + i3 * 0.02) * 0.2;
+                            break;
+
+                        case 'skeptical':
+                            // Muted purple/gray
+                            hue = 0.73 + Math.sin(time + i3 * 0.001) * 0.03;
+                            saturation = 0.4;
+                            lightness = 0.45 + exprIntensity * 0.1;
+                            break;
+
+                        case 'thinking':
+                            // Steel blue, contemplative
+                            hue = 0.58 + Math.sin(time * 1.2 + i3 * 0.001) * 0.04;
+                            saturation = 0.6;
+                            lightness = 0.5 + exprIntensity * 0.15;
+                            break;
+
+                        case 'focused':
+                            // Deep blue/indigo concentrated
+                            hue = 0.65 + Math.sin(time + i3 * 0.002) * 0.03;
+                            saturation = 0.85;
+                            lightness = 0.35 + exprIntensity * 0.12;
+                            break;
+
+                        case 'disgusted':
+                            // Olive/sickly green
+                            hue = 0.25 + Math.sin(time * 2 + i3 * 0.001) * 0.05;
+                            saturation = 0.5;
+                            lightness = 0.4 + exprIntensity * 0.1;
+                            break;
+
+                        case 'sad':
+                            // Desaturated blue/slate
+                            hue = 0.6 + Math.sin(time * 0.8 + i3 * 0.001) * 0.03;
+                            saturation = 0.35;
+                            lightness = 0.4 - exprIntensity * 0.1;
+                            break;
+
                         case 'playful':
+                            // Pink with bounce
+                            hue = 0.92 + Math.sin(time * 4 + i3 * 0.003) * 0.08;
+                            saturation = 0.9;
+                            lightness = 0.55 + Math.sin(time * 6 + i3 * 0.01) * 0.15;
+                            break;
+
                         case 'silly':
                             // Rainbow chaos
-                            hue = (time * 0.3 + i3 * 0.0005 + Math.sin(time * 3) * 0.2) % 1;
+                            hue = (time * 0.4 + i3 * 0.0006 + Math.sin(time * 4) * 0.3) % 1;
                             saturation = 1.0;
-                            lightness = 0.5 + Math.sin(time * 5 + i3 * 0.01) * 0.2;
+                            lightness = 0.5 + Math.sin(time * 7 + i3 * 0.015) * 0.2;
                             break;
-                        case 'amazed':
-                            // Sparkly white/pink
-                            hue = 0.9 + Math.sin(time * 3 + i3 * 0.001) * 0.1;
-                            saturation = 0.7;
-                            lightness = 0.55 + Math.sin(time * 8 + i3 * 0.02) * 0.25;
+
+                        case 'flirty':
+                            // Coral/soft pink
+                            hue = 0.98 + Math.sin(time * 2.5 + i3 * 0.002) * 0.04;
+                            saturation = 0.75;
+                            lightness = 0.55 + Math.sin(time * 3 + i3 * 0.01) * 0.1;
                             break;
+
+                        case 'determined':
+                            // Deep red/maroon
+                            hue = 0.02 + Math.sin(time * 1.5 + i3 * 0.001) * 0.02;
+                            saturation = 0.8;
+                            lightness = 0.4 + exprIntensity * 0.15;
+                            break;
+
+                        case 'worried':
+                            // Anxious khaki/tan
+                            hue = 0.12 + Math.sin(time * 3 + i3 * 0.002) * 0.04;
+                            saturation = 0.35;
+                            lightness = 0.5 + Math.sin(time * 5 + i3 * 0.01) * 0.08;
+                            break;
+
+                        case 'content':
+                            // Soft mint green, peaceful
+                            hue = 0.4 + Math.sin(time * 1.2 + i3 * 0.001) * 0.03;
+                            saturation = 0.5;
+                            lightness = 0.55 + Math.sin(time * 2) * 0.08;
+                            break;
+
+                        case 'confused':
+                            // Tan/beige with uncertainty
+                            hue = 0.11 + Math.sin(time * 2.5 + i3 * 0.003) * 0.05;
+                            saturation = 0.4;
+                            lightness = 0.5 + Math.sin(time * 4 + i3 * 0.01) * 0.1;
+                            break;
+
                         default:
                             expressionOverride = false;
                     }
@@ -3191,9 +3698,11 @@
                 }
                 faceChangeDetected = false;
 
-                // Show expression in status
-                if (currentExpression.name !== 'neutral' && currentExpression.intensity > 0.3) {
-                    status.textContent += ` (${currentExpression.name})`;
+                // Show expression in status with formatted name
+                if (currentExpression.name !== 'neutral' && currentExpression.intensity > 0.25) {
+                    // Convert snake_case to readable format
+                    const readableName = currentExpression.name.replace(/_/g, ' ');
+                    status.textContent += ` (${readableName})`;
                 }
             } else {
                 dot.classList.remove('active');
