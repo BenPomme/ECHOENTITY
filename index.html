@@ -696,6 +696,8 @@
                 this.activityRef = database.ref('activity');
                 this.initialized = false;
                 this.lastPresenceUpdate = 0;
+                this.otherUsersGestures = []; // Track gestures from other users
+                this.onGestureCallbacks = []; // Callbacks for when others make gestures
             }
 
             async init(userName) {
@@ -717,10 +719,30 @@
                 // Remove user on disconnect
                 this.presenceRef.onDisconnect().remove();
 
-                // Listen for online users
+                // Listen for online users and their gestures
                 this.usersRef.on('value', (snapshot) => {
+                    const oldUsers = this.onlineUsers;
                     this.onlineUsers = snapshot.val() || {};
                     this.updateOnlineUsersUI();
+
+                    // Track gesture changes from other users
+                    this.otherUsersGestures = [];
+                    for (const [id, user] of Object.entries(this.onlineUsers)) {
+                        if (id !== this.sessionId && user.gesture) {
+                            this.otherUsersGestures.push({
+                                name: user.name,
+                                gesture: user.gesture,
+                                mood: user.mood
+                            });
+
+                            // Check if gesture changed
+                            const oldUser = oldUsers[id];
+                            if (!oldUser || oldUser.gesture !== user.gesture) {
+                                // Notify callbacks about the gesture
+                                this.onGestureCallbacks.forEach(cb => cb(user.name, user.gesture, user.mood));
+                            }
+                        }
+                    }
                 });
 
                 // Listen for new users joining
@@ -871,6 +893,14 @@
                 return Object.keys(this.onlineUsers).length;
             }
 
+            getOtherUsersGestures() {
+                return this.otherUsersGestures;
+            }
+
+            onOtherUserGesture(callback) {
+                this.onGestureCallbacks.push(callback);
+            }
+
             disconnect() {
                 if (this.presenceRef) {
                     this.presenceRef.remove();
@@ -879,6 +909,153 @@
         }
 
         const multiplayer = new MultiplayerSystem();
+
+        // ════════════════════════════════════════════════════════════════
+        // COLLECTIVE LEARNING SYSTEM
+        // ════════════════════════════════════════════════════════════════
+        class CollectiveLearningSystem {
+            constructor() {
+                this.learnedGestures = new Map(); // gesture -> { count, lastSeen, responses }
+                this.gestureSequences = [];       // Recent gesture sequences for pattern learning
+                this.reproductionQueue = [];      // Queue of gestures to reproduce
+                this.isReproducing = false;
+                this.reproductionInterval = null;
+                this.lastReproductionTime = 0;
+                this.confidenceThreshold = 5;     // Min times seen to "know" a gesture
+            }
+
+            // Learn from a gesture (local or remote)
+            learn(gesture, userName, isLocal = true) {
+                const existing = this.learnedGestures.get(gesture) || {
+                    count: 0,
+                    lastSeen: 0,
+                    users: new Set(),
+                    responses: []
+                };
+
+                existing.count++;
+                existing.lastSeen = Date.now();
+                existing.users.add(userName);
+
+                this.learnedGestures.set(gesture, existing);
+
+                // Track sequences for pattern recognition
+                this.gestureSequences.push({
+                    gesture,
+                    userName,
+                    time: Date.now(),
+                    isLocal
+                });
+
+                // Keep only last 100 gestures in sequence
+                if (this.gestureSequences.length > 100) {
+                    this.gestureSequences.shift();
+                }
+
+                // Check if entity should try to reproduce
+                if (!isLocal && existing.count >= this.confidenceThreshold) {
+                    this.queueReproduction(gesture);
+                }
+
+                return existing;
+            }
+
+            // Queue a gesture for the entity to reproduce
+            queueReproduction(gesture) {
+                // Don't queue if already in queue or recently reproduced
+                if (this.reproductionQueue.includes(gesture)) return;
+                if (Date.now() - this.lastReproductionTime < 5000) return;
+
+                this.reproductionQueue.push(gesture);
+            }
+
+            // Get the next gesture to reproduce (called by animation loop)
+            getNextReproduction() {
+                if (this.reproductionQueue.length === 0) return null;
+                if (Date.now() - this.lastReproductionTime < 8000) return null;
+
+                const gesture = this.reproductionQueue.shift();
+                this.lastReproductionTime = Date.now();
+                return gesture;
+            }
+
+            // Get the shape for a gesture (for reproduction)
+            getShapeForGesture(gesture) {
+                const gestureShapes = {
+                    'open_palm': 'explosion',
+                    'fist': 'sphere',
+                    'pointing': 'beam',
+                    'peace': 'heart',
+                    'pinch': 'converge',
+                    'thumbs_up': 'spiral',
+                    'rock': 'ring',
+                    'open_palm_wave': 'wave',
+                    'open_palm_circle': 'spiral',
+                    'fist_circle': 'ring'
+                };
+                return gestureShapes[gesture] || 'flow';
+            }
+
+            // Get confidence level for a gesture (0-1)
+            getConfidence(gesture) {
+                const data = this.learnedGestures.get(gesture);
+                if (!data) return 0;
+                return Math.min(1, data.count / 20); // Max confidence at 20 occurrences
+            }
+
+            // Get most learned gestures
+            getMostLearned(limit = 5) {
+                return Array.from(this.learnedGestures.entries())
+                    .sort((a, b) => b[1].count - a[1].count)
+                    .slice(0, limit)
+                    .map(([gesture, data]) => ({
+                        gesture,
+                        count: data.count,
+                        confidence: this.getConfidence(gesture),
+                        users: Array.from(data.users)
+                    }));
+            }
+
+            // Get recent patterns (sequences that repeat)
+            getRecentPatterns() {
+                const patterns = [];
+                const recent = this.gestureSequences.slice(-20);
+
+                for (let i = 0; i < recent.length - 1; i++) {
+                    for (let j = i + 1; j < recent.length; j++) {
+                        if (recent[i].gesture === recent[j].gesture) {
+                            patterns.push(recent[i].gesture);
+                        }
+                    }
+                }
+
+                return [...new Set(patterns)];
+            }
+
+            // Combine influences from all online users
+            getCombinedMood(otherUsersGestures) {
+                if (otherUsersGestures.length === 0) return null;
+
+                const moods = otherUsersGestures.map(u => u.mood);
+                const moodCounts = {};
+                moods.forEach(m => moodCounts[m] = (moodCounts[m] || 0) + 1);
+
+                // Return most common mood
+                return Object.entries(moodCounts)
+                    .sort((a, b) => b[1] - a[1])[0]?.[0] || 'curious';
+            }
+
+            // Get collective energy level based on activity
+            getCollectiveEnergy() {
+                const recentActivity = this.gestureSequences.filter(
+                    g => Date.now() - g.time < 10000
+                ).length;
+
+                return Math.min(1, recentActivity / 10);
+            }
+        }
+
+        const collectiveLearning = new CollectiveLearningSystem();
 
         // ════════════════════════════════════════════════════════════════
         // CONFIGURATION
@@ -2764,15 +2941,72 @@
                         lastResponseTime = now;
                         particleSystem.setFormation(response.shape, response.intensity);
 
-                        // Record gesture to shared memory (throttled)
+                        // Record gesture to shared memory and collective learning
+                        const gestureKey = handData.static + (handData.motion ? '_' + handData.motion : '');
+
                         if (sharedMemory.initialized && user) {
-                            const gestureKey = handData.static + (handData.motion ? '_' + handData.motion : '');
                             sharedMemory.recordGesture(gestureKey, user.name, handData.palmCenter);
                         }
+
+                        // Local learning
+                        collectiveLearning.learn(gestureKey, user?.name || 'Anonymous', true);
                     }
                 }
 
                 entity.lastInteraction = now;
+            }
+
+            // React to other users' gestures
+            const otherGestures = multiplayer.getOtherUsersGestures();
+            if (otherGestures.length > 0 && hands.length === 0) {
+                // When local user isn't gesturing, react to others
+                const otherGesture = otherGestures[0];
+                const collectiveEnergy = collectiveLearning.getCollectiveEnergy();
+
+                // Influence entity mood based on collective
+                if (collectiveEnergy > 0.5) {
+                    entity.mood = 'excited';
+                }
+
+                // Show formation based on other user's gesture if no local hands
+                const now = performance.now();
+                if (now - lastResponseTime > CONFIG.responseDelay * 2) {
+                    const shape = collectiveLearning.getShapeForGesture(otherGesture.gesture);
+                    particleSystem.setFormation(shape, 0.5 + collectiveEnergy * 0.5);
+                    currentResponse = {
+                        shape,
+                        colorMode: 'rainbow',
+                        soundMode: 'harmonic',
+                        intensity: 0.5 + collectiveEnergy * 0.3,
+                        message: `Feeling ${otherGesture.name}'s ${otherGesture.gesture}...`
+                    };
+                    lastResponseTime = now;
+                    entity.lastInteraction = now;
+                }
+            }
+
+            // Entity reproduces learned signs when idle
+            if (hands.length === 0 && performance.now() - entity.lastInteraction > 5000) {
+                const reproduction = collectiveLearning.getNextReproduction();
+                if (reproduction) {
+                    const shape = collectiveLearning.getShapeForGesture(reproduction);
+                    const confidence = collectiveLearning.getConfidence(reproduction);
+
+                    particleSystem.setFormation(shape, 0.6 + confidence * 0.4);
+                    currentResponse = {
+                        shape,
+                        colorMode: 'pulse',
+                        soundMode: 'melodic',
+                        intensity: 0.5 + confidence * 0.3,
+                        message: `I learned "${reproduction.replace('_', ' ')}"! Let me show you...`
+                    };
+
+                    document.getElementById('entity-message').innerHTML =
+                        `<em>"${currentResponse.message}"</em>`;
+
+                    entity.lastInteraction = performance.now();
+                    lastResponseTime = performance.now();
+                }
             }
 
             // Record expression to shared memory (throttled)
@@ -2821,9 +3055,13 @@
             if (multiplayer.initialized) {
                 const now = performance.now();
                 if (!multiplayer.lastPresenceUpdate || now - multiplayer.lastPresenceUpdate > 2000) {
-                    const gesture = currentResponse?.gesture || null;
-                    const mood = currentResponse?.mood || 'curious';
-                    multiplayer.updatePresence(gesture, mood);
+                    // Send actual gesture key, not response gesture
+                    let gestureKey = null;
+                    if (handData) {
+                        gestureKey = handData.static + (handData.motion ? '_' + handData.motion : '');
+                    }
+                    const mood = entity.mood || 'curious';
+                    multiplayer.updatePresence(gestureKey, mood);
                     multiplayer.lastPresenceUpdate = now;
                 }
             }
@@ -2896,6 +3134,15 @@
 
             // Initialize shared memory system
             await sharedMemory.init();
+
+            // Set up collective learning from other users
+            multiplayer.onOtherUserGesture((userName, gesture, mood) => {
+                // Learn from other users' gestures
+                collectiveLearning.learn(gesture, userName, false);
+
+                // Show notification
+                multiplayer.showGlobalActivity(`${userName} is making: ${gesture.replace('_', ' ')}`);
+            });
 
             // Show multiplayer panels
             document.getElementById('online-panel').classList.remove('hidden');
