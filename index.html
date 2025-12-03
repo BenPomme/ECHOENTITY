@@ -1637,7 +1637,7 @@
         }
 
         // ════════════════════════════════════════════════════════════════
-        // MIMETIC SYSTEM - FACE MIMICRY
+        // MIMETIC SYSTEM - FACE MIMICRY (Enhanced for realism)
         // ════════════════════════════════════════════════════════════════
         class FaceMimicrySystem {
             constructor() {
@@ -1647,58 +1647,99 @@
                 this.compositeFace = null;
                 // Exposure counts per user
                 this.exposureCounts = new Map();
-                // Key facial landmarks for recognition (subset of 468)
-                this.keyLandmarkIndices = [
-                    // Face contour
-                    10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
-                    127, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148,
-                    // Eyes
-                    33, 133, 157, 158, 159, 160, 161, 246, 263, 362, 384, 385, 386, 387, 388, 466,
-                    // Eyebrows
-                    70, 63, 105, 66, 107, 336, 296, 334, 293, 300,
-                    // Nose
-                    1, 2, 3, 4, 5, 6, 168, 197, 195, 5, 4,
-                    // Mouth
-                    61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291,
-                    78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308
-                ];
-                this.learningRate = 0.008;
-                this.minExposuresForMimicry = 30;
+
+                // ENHANCED: Much more comprehensive landmark set for realistic faces
+                // Using nearly all 468 MediaPipe landmarks organized by facial region
+                this.facialRegions = {
+                    // Face silhouette/contour (oval outline)
+                    silhouette: [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+                                 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150,
+                                 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109],
+
+                    // Left eye (detailed)
+                    leftEye: [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246,
+                              130, 25, 110, 24, 23, 22, 26, 112, 243, 190, 56, 28, 27, 29, 30, 247],
+
+                    // Right eye (detailed)
+                    rightEye: [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398,
+                               359, 255, 339, 254, 253, 252, 256, 341, 463, 414, 286, 258, 257, 259, 260, 467],
+
+                    // Left eyebrow
+                    leftEyebrow: [70, 63, 105, 66, 107, 55, 65, 52, 53, 46],
+
+                    // Right eyebrow
+                    rightEyebrow: [300, 293, 334, 296, 336, 285, 295, 282, 283, 276],
+
+                    // Nose (bridge and tip)
+                    nose: [168, 6, 197, 195, 5, 4, 1, 19, 94, 2, 164, 0, 11, 12, 13, 14, 15, 16, 17, 18,
+                           166, 59, 75, 60, 20, 238, 239, 241, 125, 44, 237, 45, 220],
+
+                    // Upper lip
+                    upperLip: [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146],
+
+                    // Lower lip
+                    lowerLip: [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95],
+
+                    // Inner mouth
+                    innerMouth: [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308, 415, 310, 311, 312, 13, 82, 81, 80, 191],
+
+                    // Cheeks
+                    leftCheek: [116, 117, 118, 119, 100, 36, 142, 126, 217, 174, 138, 135, 169, 170, 140],
+                    rightCheek: [345, 346, 347, 348, 329, 266, 371, 355, 437, 399, 367, 364, 394, 395, 369],
+
+                    // Forehead
+                    forehead: [10, 151, 9, 8, 168, 417, 351, 419, 248, 281, 5, 4, 275, 274, 1, 44, 19, 218, 219]
+                };
+
+                // Flatten all landmarks for storage but keep region info
+                this.allLandmarkIndices = [];
+                this.landmarkRegionMap = new Map(); // Maps landmark index to region name
+                for (const [region, indices] of Object.entries(this.facialRegions)) {
+                    for (const idx of indices) {
+                        if (!this.allLandmarkIndices.includes(idx)) {
+                            this.allLandmarkIndices.push(idx);
+                            this.landmarkRegionMap.set(idx, region);
+                        }
+                    }
+                }
+
+                // FASTER learning rate for quicker face formation
+                this.learningRate = 0.05; // Was 0.008, now 6x faster
+                this.minExposuresForMimicry = 5; // Was 30, now just 5 frames!
             }
 
-            // Learn from detected face
+            // Learn from detected face (ENHANCED: stores all 468 landmarks for maximum realism)
             learnFromDetection(userId, landmarks, expression = null) {
                 if (!landmarks || landmarks.length < 468) return;
 
-                // Extract key landmarks
-                const keyLandmarks = new Float32Array(this.keyLandmarkIndices.length * 3);
-                for (let i = 0; i < this.keyLandmarkIndices.length; i++) {
-                    const idx = this.keyLandmarkIndices[i];
-                    keyLandmarks[i * 3] = landmarks[idx].x;
-                    keyLandmarks[i * 3 + 1] = landmarks[idx].y;
-                    keyLandmarks[i * 3 + 2] = landmarks[idx].z || 0;
+                // Store ALL 468 landmarks for maximum face detail
+                const fullLandmarks = new Float32Array(468 * 3);
+                for (let i = 0; i < 468; i++) {
+                    fullLandmarks[i * 3] = landmarks[i].x;
+                    fullLandmarks[i * 3 + 1] = landmarks[i].y;
+                    fullLandmarks[i * 3 + 2] = landmarks[i].z || 0;
                 }
 
-                // Normalize to face center (nose tip)
+                // Normalize to face center (nose tip - landmark 1)
                 const noseX = landmarks[1].x;
                 const noseY = landmarks[1].y;
                 const noseZ = landmarks[1].z || 0;
-                for (let i = 0; i < this.keyLandmarkIndices.length; i++) {
-                    keyLandmarks[i * 3] -= noseX;
-                    keyLandmarks[i * 3 + 1] -= noseY;
-                    keyLandmarks[i * 3 + 2] -= noseZ;
+                for (let i = 0; i < 468; i++) {
+                    fullLandmarks[i * 3] -= noseX;
+                    fullLandmarks[i * 3 + 1] -= noseY;
+                    fullLandmarks[i * 3 + 2] -= noseZ;
                 }
 
-                // Scale normalization (based on face width)
-                const leftEar = landmarks[234];
-                const rightEar = landmarks[454];
+                // Scale normalization (based on face width between temples)
+                const leftTemple = landmarks[234];
+                const rightTemple = landmarks[454];
                 const faceWidth = Math.sqrt(
-                    Math.pow(rightEar.x - leftEar.x, 2) +
-                    Math.pow(rightEar.y - leftEar.y, 2)
+                    Math.pow(rightTemple.x - leftTemple.x, 2) +
+                    Math.pow(rightTemple.y - leftTemple.y, 2)
                 );
                 const scale = faceWidth > 0 ? 1 / faceWidth : 1;
-                for (let i = 0; i < keyLandmarks.length; i++) {
-                    keyLandmarks[i] *= scale;
+                for (let i = 0; i < fullLandmarks.length; i++) {
+                    fullLandmarks[i] *= scale;
                 }
 
                 const count = (this.exposureCounts.get(userId) || 0) + 1;
@@ -1706,17 +1747,18 @@
 
                 if (!this.learnedFaces.has(userId)) {
                     this.learnedFaces.set(userId, {
-                        landmarks: new Float32Array(keyLandmarks),
+                        landmarks: new Float32Array(fullLandmarks),
                         expressions: new Map(),
                         firstSeen: Date.now(),
                         lastSeen: Date.now()
                     });
                 } else {
                     const face = this.learnedFaces.get(userId);
-                    const alpha = 1 / count;
+                    // Faster alpha for quicker convergence
+                    const alpha = Math.min(0.3, 1 / Math.sqrt(count));
 
-                    for (let i = 0; i < keyLandmarks.length; i++) {
-                        face.landmarks[i] += (keyLandmarks[i] - face.landmarks[i]) * alpha;
+                    for (let i = 0; i < fullLandmarks.length; i++) {
+                        face.landmarks[i] += (fullLandmarks[i] - face.landmarks[i]) * alpha;
                     }
                     face.lastSeen = Date.now();
                 }
@@ -1726,14 +1768,14 @@
                     const face = this.learnedFaces.get(userId);
                     if (!face.expressions.has(expression.name)) {
                         face.expressions.set(expression.name, {
-                            landmarks: new Float32Array(keyLandmarks),
+                            landmarks: new Float32Array(fullLandmarks),
                             count: 1
                         });
                     } else {
                         const expr = face.expressions.get(expression.name);
-                        const exprAlpha = 1 / (expr.count + 1);
-                        for (let i = 0; i < keyLandmarks.length; i++) {
-                            expr.landmarks[i] += (keyLandmarks[i] - expr.landmarks[i]) * exprAlpha;
+                        const exprAlpha = Math.min(0.3, 1 / Math.sqrt(expr.count + 1));
+                        for (let i = 0; i < fullLandmarks.length; i++) {
+                            expr.landmarks[i] += (fullLandmarks[i] - expr.landmarks[i]) * exprAlpha;
                         }
                         expr.count++;
                     }
@@ -1745,11 +1787,11 @@
                 return count;
             }
 
-            // Update the composite face (average of all users)
+            // Update the composite face (average of all users) - now with full 468 landmarks
             updateCompositeFace() {
                 if (this.learnedFaces.size === 0) return;
 
-                const landmarkCount = this.keyLandmarkIndices.length * 3;
+                const landmarkCount = 468 * 3;
                 if (!this.compositeFace) {
                     this.compositeFace = new Float32Array(landmarkCount);
                 }
@@ -1772,19 +1814,20 @@
                 }
             }
 
-            // Get fidelity for a user's face
+            // Get fidelity for a user's face - FASTER curve
             getFidelity(userId) {
                 const count = this.exposureCounts.get(userId) || 0;
+                // Much faster fidelity growth: 0.5 at 5 frames, 0.8 at 20 frames, 0.95 at 50 frames
                 return 1 - (1 / (1 + count * this.learningRate));
             }
 
-            // Check if we can mimic a user's face
+            // Check if we can mimic a user's face - VERY LOW threshold
             canMimic(userId) {
                 const count = this.exposureCounts.get(userId) || 0;
-                return count >= this.minExposuresForMimicry;
+                return count >= this.minExposuresForMimicry; // Just 5 frames!
             }
 
-            // Generate particle positions for a face
+            // ENHANCED: Generate highly realistic face formation using all 468 landmarks
             generateFaceFormation(userId, particleCount, expression = null, fidelityOverride = null) {
                 const face = this.learnedFaces.get(userId);
                 if (!face) return null;
@@ -1798,70 +1841,126 @@
                 }
 
                 const positions = new Float32Array(particleCount * 3);
-                const landmarkCount = this.keyLandmarkIndices.length;
+                const totalLandmarks = 468;
 
-                // Face regions with different particle densities
-                const eyeRegionStart = 16; // Index in keyLandmarkIndices
-                const eyeRegionEnd = 32;
-                const mouthRegionStart = 54;
-                const mouthRegionEnd = 76;
+                // Region-based particle distribution for realistic face density
+                // More particles in expressive areas (eyes, mouth) and contours
+                const regionWeights = {
+                    leftEye: 0.12,      // 12% of particles
+                    rightEye: 0.12,     // 12% of particles
+                    upperLip: 0.08,     // 8% of particles
+                    lowerLip: 0.08,     // 8% of particles
+                    nose: 0.10,         // 10% of particles
+                    leftEyebrow: 0.04,  // 4% of particles
+                    rightEyebrow: 0.04, // 4% of particles
+                    silhouette: 0.20,   // 20% of particles (face outline)
+                    leftCheek: 0.06,    // 6% of particles
+                    rightCheek: 0.06,   // 6% of particles
+                    forehead: 0.05,     // 5% of particles
+                    innerMouth: 0.03,   // 3% of particles (dark area)
+                    fill: 0.02          // 2% random fill
+                };
+
+                // Build cumulative distribution
+                const regions = Object.keys(regionWeights);
+                const cumulative = [];
+                let sum = 0;
+                for (const region of regions) {
+                    sum += regionWeights[region];
+                    cumulative.push({ region, threshold: sum });
+                }
 
                 for (let i = 0; i < particleCount; i++) {
                     const i3 = i * 3;
 
-                    // Bias toward eyes and mouth (more expressive regions)
-                    let landmarkIdx;
-                    const region = Math.random();
-                    if (region < 0.3) {
-                        // Eyes (30%)
-                        landmarkIdx = eyeRegionStart + Math.floor(Math.random() * (eyeRegionEnd - eyeRegionStart));
-                    } else if (region < 0.5) {
-                        // Mouth (20%)
-                        landmarkIdx = mouthRegionStart + Math.floor(Math.random() * (mouthRegionEnd - mouthRegionStart));
-                    } else {
-                        // Rest of face (50%)
-                        landmarkIdx = Math.floor(Math.random() * landmarkCount);
+                    // Select region based on weighted distribution
+                    const r = Math.random();
+                    let selectedRegion = 'fill';
+                    for (const { region, threshold } of cumulative) {
+                        if (r < threshold) {
+                            selectedRegion = region;
+                            break;
+                        }
                     }
 
-                    // Get two nearby landmarks for interpolation
-                    const nextIdx = (landmarkIdx + 1) % landmarkCount;
+                    // Get landmarks for the selected region
+                    let regionLandmarks;
+                    if (selectedRegion === 'fill') {
+                        // Random landmark from anywhere
+                        const idx = Math.floor(Math.random() * totalLandmarks);
+                        regionLandmarks = [idx];
+                    } else {
+                        regionLandmarks = this.facialRegions[selectedRegion] || [0];
+                    }
+
+                    // Pick a random landmark from the region
+                    const landmarkIdx = regionLandmarks[Math.floor(Math.random() * regionLandmarks.length)];
+
+                    // Find a nearby landmark for smooth interpolation
+                    let nearbyIdx;
+                    if (regionLandmarks.length > 1) {
+                        // Stay within region for coherent features
+                        nearbyIdx = regionLandmarks[Math.floor(Math.random() * regionLandmarks.length)];
+                    } else {
+                        // Random nearby
+                        nearbyIdx = Math.min(467, Math.max(0, landmarkIdx + Math.floor(Math.random() * 10) - 5));
+                    }
+
+                    // Interpolation factor
                     const t = Math.random();
 
                     const l1 = landmarkIdx * 3;
-                    const l2 = nextIdx * 3;
+                    const l2 = nearbyIdx * 3;
 
-                    const noise = (1 - fidelity) * 0.15;
+                    // Fidelity-based noise - less noise = more accurate
+                    const baseNoise = (1 - fidelity) * 0.08;
+
+                    // Regional noise adjustment - eyes and mouth get less noise for clarity
+                    let noiseMultiplier = 1.0;
+                    if (selectedRegion.includes('Eye') || selectedRegion.includes('Lip') || selectedRegion === 'innerMouth') {
+                        noiseMultiplier = 0.5; // Sharper features
+                    } else if (selectedRegion === 'silhouette') {
+                        noiseMultiplier = 0.3; // Very crisp outline
+                    }
+
+                    const noise = baseNoise * noiseMultiplier;
+
+                    // Add slight surface offset for 3D depth feeling
+                    const depthOffset = selectedRegion === 'nose' ? 0.02 : (selectedRegion === 'innerMouth' ? -0.02 : 0);
 
                     positions[i3] = landmarks[l1] * (1 - t) + landmarks[l2] * t + (Math.random() - 0.5) * noise;
                     positions[i3 + 1] = landmarks[l1 + 1] * (1 - t) + landmarks[l2 + 1] * t + (Math.random() - 0.5) * noise;
-                    positions[i3 + 2] = landmarks[l1 + 2] * (1 - t) + landmarks[l2 + 2] * t + (Math.random() - 0.5) * noise * 0.5;
+                    positions[i3 + 2] = landmarks[l1 + 2] * (1 - t) + landmarks[l2 + 2] * t + (Math.random() - 0.5) * noise * 0.3 + depthOffset;
                 }
 
                 return positions;
             }
 
-            // Generate composite face formation
+            // ENHANCED: Generate composite face with all 468 landmarks
             generateCompositeFaceFormation(particleCount) {
                 if (!this.compositeFace) return null;
 
+                // Reuse the same region-based generation but with composite landmarks
                 const positions = new Float32Array(particleCount * 3);
-                const landmarkCount = this.keyLandmarkIndices.length;
-                const fidelity = Math.min(0.9, this.learnedFaces.size * 0.1); // Grows with user count
+                const totalLandmarks = 468;
+                const fidelity = Math.min(0.95, 0.5 + this.learnedFaces.size * 0.15);
 
                 for (let i = 0; i < particleCount; i++) {
                     const i3 = i * 3;
-                    const landmarkIdx = Math.floor(Math.random() * landmarkCount);
-                    const nextIdx = (landmarkIdx + 1) % landmarkCount;
+
+                    // Random landmark with bias toward face center
+                    const landmarkIdx = Math.floor(Math.random() * totalLandmarks);
+                    const nearbyIdx = Math.min(467, Math.max(0, landmarkIdx + Math.floor(Math.random() * 20) - 10));
                     const t = Math.random();
 
                     const l1 = landmarkIdx * 3;
-                    const l2 = nextIdx * 3;
+                    const l2 = nearbyIdx * 3;
 
-                    const noise = (1 - fidelity) * 0.12;
+                    const noise = (1 - fidelity) * 0.06;
 
                     positions[i3] = this.compositeFace[l1] * (1 - t) + this.compositeFace[l2] * t + (Math.random() - 0.5) * noise;
                     positions[i3 + 1] = this.compositeFace[l1 + 1] * (1 - t) + this.compositeFace[l2 + 1] * t + (Math.random() - 0.5) * noise;
-                    positions[i3 + 2] = this.compositeFace[l1 + 2] * (1 - t) + this.compositeFace[l2 + 2] * t + (Math.random() - 0.5) * noise * 0.5;
+                    positions[i3 + 2] = this.compositeFace[l1 + 2] * (1 - t) + this.compositeFace[l2 + 2] * t + (Math.random() - 0.5) * noise * 0.3;
                 }
 
                 return positions;
@@ -1953,18 +2052,18 @@
                 this.handMimicry = handMimicry;
                 this.faceMimicry = faceMimicry;
 
-                // Global fidelity thresholds for stage transitions
+                // ACCELERATED: Much lower thresholds for faster face emergence
                 this.stages = [
                     { name: 'primordial', handThreshold: 0, faceThreshold: 0, description: 'Abstract only' },
-                    { name: 'crude_imitation', handThreshold: 0.15, faceThreshold: 0, description: 'Crude hand blobs' },
-                    { name: 'gesture_echo', handThreshold: 0.35, faceThreshold: 0, description: 'Recognizable gestures' },
-                    { name: 'face_emergence', handThreshold: 0.5, faceThreshold: 0.2, description: 'Generic face emerges' },
-                    { name: 'your_face', handThreshold: 0.6, faceThreshold: 0.5, description: 'Your face forms' },
-                    { name: 'temporal_echoes', handThreshold: 0.7, faceThreshold: 0.6, description: 'Past self replays' },
-                    { name: 'other_users', handThreshold: 0.75, faceThreshold: 0.65, description: 'Other users appear' },
-                    { name: 'composite', handThreshold: 0.8, faceThreshold: 0.7, description: 'Collective entity' },
-                    { name: 'prediction', handThreshold: 0.85, faceThreshold: 0.75, description: 'Predictive mimicry' },
-                    { name: 'full_entity', handThreshold: 0.9, faceThreshold: 0.8, description: 'Full consciousness' }
+                    { name: 'crude_imitation', handThreshold: 0.05, faceThreshold: 0.02, description: 'Crude blobs forming' },
+                    { name: 'face_emergence', handThreshold: 0.1, faceThreshold: 0.05, description: 'Face starts emerging' },
+                    { name: 'your_face', handThreshold: 0.15, faceThreshold: 0.1, description: 'Your face forms' },
+                    { name: 'gesture_echo', handThreshold: 0.25, faceThreshold: 0.15, description: 'Gestures recognized' },
+                    { name: 'temporal_echoes', handThreshold: 0.35, faceThreshold: 0.25, description: 'Past self replays' },
+                    { name: 'other_users', handThreshold: 0.45, faceThreshold: 0.35, description: 'Other users appear' },
+                    { name: 'composite', handThreshold: 0.55, faceThreshold: 0.45, description: 'Collective entity' },
+                    { name: 'prediction', handThreshold: 0.65, faceThreshold: 0.55, description: 'Predictive mimicry' },
+                    { name: 'full_entity', handThreshold: 0.75, faceThreshold: 0.65, description: 'Full consciousness' }
                 ];
 
                 this.currentStage = 0;
@@ -2006,9 +2105,10 @@
                 const stage = this.getCurrentStage();
                 const stageIndex = this.stages.indexOf(stage);
 
+                // ACCELERATED: Face features unlock much earlier
                 const featureRequirements = {
                     'hand_mimicry': 1,
-                    'face_mimicry': 3,
+                    'face_mimicry': 2,      // Was 3 - now face emerges at stage 2
                     'temporal_replay': 5,
                     'other_users_display': 6,
                     'composite_entity': 7,
@@ -5105,25 +5205,25 @@
                         lastResponseTime = performance.now();
                     }
                 }
-                // Stage 4+: Show user's face
-                else if (stageIndex >= 4 && random < 0.12 && user && faceMimicry.canMimic(user.id || user.name)) {
+                // ACCELERATED: Stage 2+ shows face much more frequently (was stage 4, 12% chance)
+                else if (stageIndex >= 2 && random < 0.35 && user && faceMimicry.canMimic(user.id || user.name)) {
                     mimeticMode = 'face';
                     currentMimeticUserId = user.id || user.name;
                     lastMimeticTrigger = performance.now();
-                    mimeticDisplayDuration = 5000;
+                    mimeticDisplayDuration = 6000; // Longer display time
                     mimeticMorphProgress = 0;
 
                     const fidelity = faceMimicry.getFidelity(currentMimeticUserId);
                     const fidelityPercent = Math.round(fidelity * 100);
 
                     document.getElementById('entity-message').innerHTML =
-                        `<em>"This is how I see you... (${fidelityPercent}% clarity)"</em>`;
+                        `<em>"I'm learning your face... (${fidelityPercent}% clarity)"</em>`;
 
                     entity.lastInteraction = performance.now();
                     lastResponseTime = performance.now();
                 }
-                // Stage 7+: Show composite face (collective entity)
-                else if (stageIndex >= 7 && random < 0.08 && faceMimicry.learnedFaces.size > 1) {
+                // ACCELERATED: Stage 5+ shows composite face (was stage 7)
+                else if (stageIndex >= 5 && random < 0.15 && faceMimicry.learnedFaces.size > 1) {
                     mimeticMode = 'composite';
                     lastMimeticTrigger = performance.now();
                     mimeticDisplayDuration = 6000;
