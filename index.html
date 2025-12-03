@@ -604,6 +604,20 @@
             </div>
         </div>
 
+        <!-- Evolution Stage Display -->
+        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 4px;">
+                <span>Evolution</span>
+                <span id="evolution-stage">Primordial</span>
+            </div>
+            <div class="memory-bar">
+                <div class="memory-fill" id="evolution-fill" style="width: 0%; background: linear-gradient(90deg, #8be9fd, #bd93f9, #ff79c6);"></div>
+            </div>
+            <div id="mimetic-stats" style="font-size: 9px; color: rgba(255,255,255,0.5); margin-top: 4px;">
+                Hands: 0 | Faces: 0 | Memories: 0
+            </div>
+        </div>
+
         <div id="gesture-display">
             Last detected: None
         </div>
@@ -1398,6 +1412,928 @@
         }
 
         const collectiveLearning = new CollectiveLearningSystem();
+
+        // ════════════════════════════════════════════════════════════════
+        // MIMETIC SYSTEM - HAND MIMICRY
+        // ════════════════════════════════════════════════════════════════
+        class HandMimicrySystem {
+            constructor() {
+                // Stores learned hand shapes per gesture (21 landmarks * 3 coordinates)
+                this.learnedHandShapes = new Map();
+                // Exposure counts per gesture for fidelity calculation
+                this.exposureCounts = new Map();
+                // Variance tracking for confidence
+                this.landmarkVariances = new Map();
+                // Current target shape being rendered
+                this.currentTargetLandmarks = null;
+                // Learning rate (slower = more deliberate)
+                this.learningRate = 0.01;
+                // Minimum exposures before attempting mimicry
+                this.minExposuresForMimicry = 10;
+            }
+
+            // Learn from a detected hand
+            learnFromDetection(gestureName, landmarks) {
+                if (!landmarks || landmarks.length < 21) return;
+
+                // Convert landmarks to flat array
+                const flatLandmarks = new Float32Array(21 * 3);
+                for (let i = 0; i < 21; i++) {
+                    flatLandmarks[i * 3] = landmarks[i].x;
+                    flatLandmarks[i * 3 + 1] = landmarks[i].y;
+                    flatLandmarks[i * 3 + 2] = landmarks[i].z || 0;
+                }
+
+                // Normalize to center around wrist (landmark 0)
+                const wristX = flatLandmarks[0];
+                const wristY = flatLandmarks[1];
+                const wristZ = flatLandmarks[2];
+                for (let i = 0; i < 21; i++) {
+                    flatLandmarks[i * 3] -= wristX;
+                    flatLandmarks[i * 3 + 1] -= wristY;
+                    flatLandmarks[i * 3 + 2] -= wristZ;
+                }
+
+                // Scale normalization (based on palm size)
+                const palmSize = Math.sqrt(
+                    Math.pow(flatLandmarks[5 * 3] - flatLandmarks[17 * 3], 2) +
+                    Math.pow(flatLandmarks[5 * 3 + 1] - flatLandmarks[17 * 3 + 1], 2)
+                );
+                const scale = palmSize > 0 ? 1 / palmSize : 1;
+                for (let i = 0; i < 63; i++) {
+                    flatLandmarks[i] *= scale;
+                }
+
+                const count = (this.exposureCounts.get(gestureName) || 0) + 1;
+                this.exposureCounts.set(gestureName, count);
+
+                if (!this.learnedHandShapes.has(gestureName)) {
+                    // First observation - store directly
+                    this.learnedHandShapes.set(gestureName, new Float32Array(flatLandmarks));
+                    this.landmarkVariances.set(gestureName, new Float32Array(63).fill(1));
+                } else {
+                    // Running average update
+                    const existing = this.learnedHandShapes.get(gestureName);
+                    const variances = this.landmarkVariances.get(gestureName);
+                    const alpha = 1 / count; // Decreasing learning rate
+
+                    for (let i = 0; i < 63; i++) {
+                        const diff = flatLandmarks[i] - existing[i];
+                        existing[i] += diff * alpha;
+                        // Update variance (for confidence calculation)
+                        variances[i] = variances[i] * (1 - alpha) + diff * diff * alpha;
+                    }
+                }
+
+                return count;
+            }
+
+            // Get fidelity score for a gesture (0-1)
+            getFidelity(gestureName) {
+                const count = this.exposureCounts.get(gestureName) || 0;
+                // Sigmoid-like curve: 0.33 at 50, 0.67 at 200, 0.83 at 500
+                return 1 - (1 / (1 + count * this.learningRate));
+            }
+
+            // Get overall system fidelity
+            getOverallFidelity() {
+                if (this.exposureCounts.size === 0) return 0;
+                let total = 0;
+                this.exposureCounts.forEach((count, gesture) => {
+                    total += this.getFidelity(gesture);
+                });
+                return total / this.exposureCounts.size;
+            }
+
+            // Check if we can attempt mimicry for a gesture
+            canMimic(gestureName) {
+                const count = this.exposureCounts.get(gestureName) || 0;
+                return count >= this.minExposuresForMimicry;
+            }
+
+            // Generate particle positions for a hand shape
+            generateHandFormation(gestureName, particleCount, fidelityOverride = null) {
+                const shape = this.learnedHandShapes.get(gestureName);
+                if (!shape) return null;
+
+                const fidelity = fidelityOverride !== null ? fidelityOverride : this.getFidelity(gestureName);
+                const variances = this.landmarkVariances.get(gestureName) || new Float32Array(63).fill(0.1);
+
+                const positions = new Float32Array(particleCount * 3);
+
+                // Distribute particles across hand structure
+                // Finger bones get more particles
+                const fingerSegments = [
+                    [0, 1, 2, 3, 4],      // Thumb
+                    [0, 5, 6, 7, 8],      // Index
+                    [0, 9, 10, 11, 12],   // Middle
+                    [0, 13, 14, 15, 16],  // Ring
+                    [0, 17, 18, 19, 20]   // Pinky
+                ];
+
+                const palmIndices = [0, 5, 9, 13, 17]; // Palm polygon
+
+                for (let i = 0; i < particleCount; i++) {
+                    const i3 = i * 3;
+
+                    // Decide if this particle is finger or palm
+                    const isFinger = Math.random() < 0.7;
+
+                    if (isFinger) {
+                        // Pick a random finger
+                        const fingerIdx = Math.floor(Math.random() * 5);
+                        const finger = fingerSegments[fingerIdx];
+
+                        // Pick a random segment along the finger
+                        const segmentIdx = Math.floor(Math.random() * (finger.length - 1));
+                        const startLandmark = finger[segmentIdx];
+                        const endLandmark = finger[segmentIdx + 1];
+
+                        // Interpolate along segment
+                        const t = Math.random();
+                        const s3 = startLandmark * 3;
+                        const e3 = endLandmark * 3;
+
+                        // Calculate position with fidelity-based noise
+                        const noise = (1 - fidelity) * 0.3;
+                        const varianceNoise = Math.sqrt(variances[s3]) * (1 - fidelity);
+
+                        positions[i3] = shape[s3] * (1 - t) + shape[e3] * t + (Math.random() - 0.5) * noise + (Math.random() - 0.5) * varianceNoise;
+                        positions[i3 + 1] = shape[s3 + 1] * (1 - t) + shape[e3 + 1] * t + (Math.random() - 0.5) * noise + (Math.random() - 0.5) * varianceNoise;
+                        positions[i3 + 2] = shape[s3 + 2] * (1 - t) + shape[e3 + 2] * t + (Math.random() - 0.5) * noise * 0.5;
+                    } else {
+                        // Palm particle - random point in palm polygon
+                        const p1 = palmIndices[Math.floor(Math.random() * palmIndices.length)];
+                        const p2 = palmIndices[Math.floor(Math.random() * palmIndices.length)];
+                        const t = Math.random();
+
+                        const noise = (1 - fidelity) * 0.2;
+
+                        positions[i3] = shape[p1 * 3] * (1 - t) + shape[p2 * 3] * t + (Math.random() - 0.5) * noise;
+                        positions[i3 + 1] = shape[p1 * 3 + 1] * (1 - t) + shape[p2 * 3 + 1] * t + (Math.random() - 0.5) * noise;
+                        positions[i3 + 2] = shape[p1 * 3 + 2] * (1 - t) + shape[p2 * 3 + 2] * t + (Math.random() - 0.5) * noise * 0.5;
+                    }
+                }
+
+                return positions;
+            }
+
+            // Get most learned gestures
+            getMostLearned(limit = 5) {
+                return Array.from(this.exposureCounts.entries())
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, limit)
+                    .map(([gesture, count]) => ({
+                        gesture,
+                        count,
+                        fidelity: this.getFidelity(gesture),
+                        canMimic: this.canMimic(gesture)
+                    }));
+            }
+
+            // Save to localStorage
+            save() {
+                const data = {
+                    shapes: {},
+                    exposures: {},
+                    variances: {}
+                };
+                this.learnedHandShapes.forEach((shape, gesture) => {
+                    data.shapes[gesture] = Array.from(shape);
+                });
+                this.exposureCounts.forEach((count, gesture) => {
+                    data.exposures[gesture] = count;
+                });
+                this.landmarkVariances.forEach((variance, gesture) => {
+                    data.variances[gesture] = Array.from(variance);
+                });
+                try {
+                    localStorage.setItem('echo_hand_mimicry', JSON.stringify(data));
+                } catch (e) {
+                    console.warn('Could not save hand mimicry data:', e);
+                }
+            }
+
+            // Load from localStorage
+            load() {
+                try {
+                    const data = JSON.parse(localStorage.getItem('echo_hand_mimicry'));
+                    if (data) {
+                        for (const gesture in data.shapes) {
+                            this.learnedHandShapes.set(gesture, new Float32Array(data.shapes[gesture]));
+                        }
+                        for (const gesture in data.exposures) {
+                            this.exposureCounts.set(gesture, data.exposures[gesture]);
+                        }
+                        for (const gesture in data.variances) {
+                            this.landmarkVariances.set(gesture, new Float32Array(data.variances[gesture]));
+                        }
+                        console.log('Loaded hand mimicry data:', this.exposureCounts.size, 'gestures');
+                    }
+                } catch (e) {
+                    console.warn('Could not load hand mimicry data:', e);
+                }
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // MIMETIC SYSTEM - FACE MIMICRY
+        // ════════════════════════════════════════════════════════════════
+        class FaceMimicrySystem {
+            constructor() {
+                // Stores learned face models per user
+                this.learnedFaces = new Map();
+                // Composite face (averaged across all users)
+                this.compositeFace = null;
+                // Exposure counts per user
+                this.exposureCounts = new Map();
+                // Key facial landmarks for recognition (subset of 468)
+                this.keyLandmarkIndices = [
+                    // Face contour
+                    10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+                    127, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148,
+                    // Eyes
+                    33, 133, 157, 158, 159, 160, 161, 246, 263, 362, 384, 385, 386, 387, 388, 466,
+                    // Eyebrows
+                    70, 63, 105, 66, 107, 336, 296, 334, 293, 300,
+                    // Nose
+                    1, 2, 3, 4, 5, 6, 168, 197, 195, 5, 4,
+                    // Mouth
+                    61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291,
+                    78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308
+                ];
+                this.learningRate = 0.008;
+                this.minExposuresForMimicry = 30;
+            }
+
+            // Learn from detected face
+            learnFromDetection(userId, landmarks, expression = null) {
+                if (!landmarks || landmarks.length < 468) return;
+
+                // Extract key landmarks
+                const keyLandmarks = new Float32Array(this.keyLandmarkIndices.length * 3);
+                for (let i = 0; i < this.keyLandmarkIndices.length; i++) {
+                    const idx = this.keyLandmarkIndices[i];
+                    keyLandmarks[i * 3] = landmarks[idx].x;
+                    keyLandmarks[i * 3 + 1] = landmarks[idx].y;
+                    keyLandmarks[i * 3 + 2] = landmarks[idx].z || 0;
+                }
+
+                // Normalize to face center (nose tip)
+                const noseX = landmarks[1].x;
+                const noseY = landmarks[1].y;
+                const noseZ = landmarks[1].z || 0;
+                for (let i = 0; i < this.keyLandmarkIndices.length; i++) {
+                    keyLandmarks[i * 3] -= noseX;
+                    keyLandmarks[i * 3 + 1] -= noseY;
+                    keyLandmarks[i * 3 + 2] -= noseZ;
+                }
+
+                // Scale normalization (based on face width)
+                const leftEar = landmarks[234];
+                const rightEar = landmarks[454];
+                const faceWidth = Math.sqrt(
+                    Math.pow(rightEar.x - leftEar.x, 2) +
+                    Math.pow(rightEar.y - leftEar.y, 2)
+                );
+                const scale = faceWidth > 0 ? 1 / faceWidth : 1;
+                for (let i = 0; i < keyLandmarks.length; i++) {
+                    keyLandmarks[i] *= scale;
+                }
+
+                const count = (this.exposureCounts.get(userId) || 0) + 1;
+                this.exposureCounts.set(userId, count);
+
+                if (!this.learnedFaces.has(userId)) {
+                    this.learnedFaces.set(userId, {
+                        landmarks: new Float32Array(keyLandmarks),
+                        expressions: new Map(),
+                        firstSeen: Date.now(),
+                        lastSeen: Date.now()
+                    });
+                } else {
+                    const face = this.learnedFaces.get(userId);
+                    const alpha = 1 / count;
+
+                    for (let i = 0; i < keyLandmarks.length; i++) {
+                        face.landmarks[i] += (keyLandmarks[i] - face.landmarks[i]) * alpha;
+                    }
+                    face.lastSeen = Date.now();
+                }
+
+                // Store expression if provided
+                if (expression && expression.name !== 'neutral') {
+                    const face = this.learnedFaces.get(userId);
+                    if (!face.expressions.has(expression.name)) {
+                        face.expressions.set(expression.name, {
+                            landmarks: new Float32Array(keyLandmarks),
+                            count: 1
+                        });
+                    } else {
+                        const expr = face.expressions.get(expression.name);
+                        const exprAlpha = 1 / (expr.count + 1);
+                        for (let i = 0; i < keyLandmarks.length; i++) {
+                            expr.landmarks[i] += (keyLandmarks[i] - expr.landmarks[i]) * exprAlpha;
+                        }
+                        expr.count++;
+                    }
+                }
+
+                // Update composite face
+                this.updateCompositeFace();
+
+                return count;
+            }
+
+            // Update the composite face (average of all users)
+            updateCompositeFace() {
+                if (this.learnedFaces.size === 0) return;
+
+                const landmarkCount = this.keyLandmarkIndices.length * 3;
+                if (!this.compositeFace) {
+                    this.compositeFace = new Float32Array(landmarkCount);
+                }
+
+                // Reset
+                this.compositeFace.fill(0);
+
+                let totalWeight = 0;
+                this.learnedFaces.forEach((face, userId) => {
+                    const weight = this.exposureCounts.get(userId) || 1;
+                    for (let i = 0; i < landmarkCount; i++) {
+                        this.compositeFace[i] += face.landmarks[i] * weight;
+                    }
+                    totalWeight += weight;
+                });
+
+                // Normalize
+                for (let i = 0; i < landmarkCount; i++) {
+                    this.compositeFace[i] /= totalWeight;
+                }
+            }
+
+            // Get fidelity for a user's face
+            getFidelity(userId) {
+                const count = this.exposureCounts.get(userId) || 0;
+                return 1 - (1 / (1 + count * this.learningRate));
+            }
+
+            // Check if we can mimic a user's face
+            canMimic(userId) {
+                const count = this.exposureCounts.get(userId) || 0;
+                return count >= this.minExposuresForMimicry;
+            }
+
+            // Generate particle positions for a face
+            generateFaceFormation(userId, particleCount, expression = null, fidelityOverride = null) {
+                const face = this.learnedFaces.get(userId);
+                if (!face) return null;
+
+                const fidelity = fidelityOverride !== null ? fidelityOverride : this.getFidelity(userId);
+
+                // Use expression-specific landmarks if available
+                let landmarks = face.landmarks;
+                if (expression && face.expressions.has(expression)) {
+                    landmarks = face.expressions.get(expression).landmarks;
+                }
+
+                const positions = new Float32Array(particleCount * 3);
+                const landmarkCount = this.keyLandmarkIndices.length;
+
+                // Face regions with different particle densities
+                const eyeRegionStart = 16; // Index in keyLandmarkIndices
+                const eyeRegionEnd = 32;
+                const mouthRegionStart = 54;
+                const mouthRegionEnd = 76;
+
+                for (let i = 0; i < particleCount; i++) {
+                    const i3 = i * 3;
+
+                    // Bias toward eyes and mouth (more expressive regions)
+                    let landmarkIdx;
+                    const region = Math.random();
+                    if (region < 0.3) {
+                        // Eyes (30%)
+                        landmarkIdx = eyeRegionStart + Math.floor(Math.random() * (eyeRegionEnd - eyeRegionStart));
+                    } else if (region < 0.5) {
+                        // Mouth (20%)
+                        landmarkIdx = mouthRegionStart + Math.floor(Math.random() * (mouthRegionEnd - mouthRegionStart));
+                    } else {
+                        // Rest of face (50%)
+                        landmarkIdx = Math.floor(Math.random() * landmarkCount);
+                    }
+
+                    // Get two nearby landmarks for interpolation
+                    const nextIdx = (landmarkIdx + 1) % landmarkCount;
+                    const t = Math.random();
+
+                    const l1 = landmarkIdx * 3;
+                    const l2 = nextIdx * 3;
+
+                    const noise = (1 - fidelity) * 0.15;
+
+                    positions[i3] = landmarks[l1] * (1 - t) + landmarks[l2] * t + (Math.random() - 0.5) * noise;
+                    positions[i3 + 1] = landmarks[l1 + 1] * (1 - t) + landmarks[l2 + 1] * t + (Math.random() - 0.5) * noise;
+                    positions[i3 + 2] = landmarks[l1 + 2] * (1 - t) + landmarks[l2 + 2] * t + (Math.random() - 0.5) * noise * 0.5;
+                }
+
+                return positions;
+            }
+
+            // Generate composite face formation
+            generateCompositeFaceFormation(particleCount) {
+                if (!this.compositeFace) return null;
+
+                const positions = new Float32Array(particleCount * 3);
+                const landmarkCount = this.keyLandmarkIndices.length;
+                const fidelity = Math.min(0.9, this.learnedFaces.size * 0.1); // Grows with user count
+
+                for (let i = 0; i < particleCount; i++) {
+                    const i3 = i * 3;
+                    const landmarkIdx = Math.floor(Math.random() * landmarkCount);
+                    const nextIdx = (landmarkIdx + 1) % landmarkCount;
+                    const t = Math.random();
+
+                    const l1 = landmarkIdx * 3;
+                    const l2 = nextIdx * 3;
+
+                    const noise = (1 - fidelity) * 0.12;
+
+                    positions[i3] = this.compositeFace[l1] * (1 - t) + this.compositeFace[l2] * t + (Math.random() - 0.5) * noise;
+                    positions[i3 + 1] = this.compositeFace[l1 + 1] * (1 - t) + this.compositeFace[l2 + 1] * t + (Math.random() - 0.5) * noise;
+                    positions[i3 + 2] = this.compositeFace[l1 + 2] * (1 - t) + this.compositeFace[l2 + 2] * t + (Math.random() - 0.5) * noise * 0.5;
+                }
+
+                return positions;
+            }
+
+            // Get all learned users
+            getLearnedUsers() {
+                return Array.from(this.learnedFaces.entries()).map(([userId, face]) => ({
+                    userId,
+                    exposures: this.exposureCounts.get(userId) || 0,
+                    fidelity: this.getFidelity(userId),
+                    canMimic: this.canMimic(userId),
+                    expressions: Array.from(face.expressions.keys()),
+                    lastSeen: face.lastSeen
+                }));
+            }
+
+            // Save to localStorage
+            save() {
+                const data = {
+                    faces: {},
+                    exposures: {},
+                    composite: this.compositeFace ? Array.from(this.compositeFace) : null
+                };
+                this.learnedFaces.forEach((face, userId) => {
+                    data.faces[userId] = {
+                        landmarks: Array.from(face.landmarks),
+                        firstSeen: face.firstSeen,
+                        lastSeen: face.lastSeen,
+                        expressions: {}
+                    };
+                    face.expressions.forEach((expr, name) => {
+                        data.faces[userId].expressions[name] = {
+                            landmarks: Array.from(expr.landmarks),
+                            count: expr.count
+                        };
+                    });
+                });
+                this.exposureCounts.forEach((count, userId) => {
+                    data.exposures[userId] = count;
+                });
+                try {
+                    localStorage.setItem('echo_face_mimicry', JSON.stringify(data));
+                } catch (e) {
+                    console.warn('Could not save face mimicry data:', e);
+                }
+            }
+
+            // Load from localStorage
+            load() {
+                try {
+                    const data = JSON.parse(localStorage.getItem('echo_face_mimicry'));
+                    if (data) {
+                        for (const userId in data.faces) {
+                            const faceData = data.faces[userId];
+                            const face = {
+                                landmarks: new Float32Array(faceData.landmarks),
+                                expressions: new Map(),
+                                firstSeen: faceData.firstSeen,
+                                lastSeen: faceData.lastSeen
+                            };
+                            for (const exprName in faceData.expressions) {
+                                face.expressions.set(exprName, {
+                                    landmarks: new Float32Array(faceData.expressions[exprName].landmarks),
+                                    count: faceData.expressions[exprName].count
+                                });
+                            }
+                            this.learnedFaces.set(userId, face);
+                        }
+                        for (const userId in data.exposures) {
+                            this.exposureCounts.set(userId, data.exposures[userId]);
+                        }
+                        if (data.composite) {
+                            this.compositeFace = new Float32Array(data.composite);
+                        }
+                        console.log('Loaded face mimicry data:', this.learnedFaces.size, 'faces');
+                    }
+                } catch (e) {
+                    console.warn('Could not load face mimicry data:', e);
+                }
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // MIMETIC SYSTEM - FIDELITY CONTROLLER
+        // ════════════════════════════════════════════════════════════════
+        class FidelityController {
+            constructor(handMimicry, faceMimicry) {
+                this.handMimicry = handMimicry;
+                this.faceMimicry = faceMimicry;
+
+                // Global fidelity thresholds for stage transitions
+                this.stages = [
+                    { name: 'primordial', handThreshold: 0, faceThreshold: 0, description: 'Abstract only' },
+                    { name: 'crude_imitation', handThreshold: 0.15, faceThreshold: 0, description: 'Crude hand blobs' },
+                    { name: 'gesture_echo', handThreshold: 0.35, faceThreshold: 0, description: 'Recognizable gestures' },
+                    { name: 'face_emergence', handThreshold: 0.5, faceThreshold: 0.2, description: 'Generic face emerges' },
+                    { name: 'your_face', handThreshold: 0.6, faceThreshold: 0.5, description: 'Your face forms' },
+                    { name: 'temporal_echoes', handThreshold: 0.7, faceThreshold: 0.6, description: 'Past self replays' },
+                    { name: 'other_users', handThreshold: 0.75, faceThreshold: 0.65, description: 'Other users appear' },
+                    { name: 'composite', handThreshold: 0.8, faceThreshold: 0.7, description: 'Collective entity' },
+                    { name: 'prediction', handThreshold: 0.85, faceThreshold: 0.75, description: 'Predictive mimicry' },
+                    { name: 'full_entity', handThreshold: 0.9, faceThreshold: 0.8, description: 'Full consciousness' }
+                ];
+
+                this.currentStage = 0;
+                this.stageTransitionCallbacks = [];
+            }
+
+            // Get current evolution stage
+            getCurrentStage() {
+                const handFidelity = this.handMimicry.getOverallFidelity();
+                const faceFidelity = this.faceMimicry.learnedFaces.size > 0
+                    ? Array.from(this.faceMimicry.exposureCounts.values()).reduce((a, b) => a + b, 0) / 500
+                    : 0;
+
+                let newStage = 0;
+                for (let i = this.stages.length - 1; i >= 0; i--) {
+                    const stage = this.stages[i];
+                    if (handFidelity >= stage.handThreshold || faceFidelity >= stage.faceThreshold) {
+                        newStage = i;
+                        break;
+                    }
+                }
+
+                if (newStage !== this.currentStage) {
+                    const oldStage = this.currentStage;
+                    this.currentStage = newStage;
+                    this.onStageTransition(oldStage, newStage);
+                }
+
+                return this.stages[this.currentStage];
+            }
+
+            // Get stage by index
+            getStage(index) {
+                return this.stages[Math.min(index, this.stages.length - 1)];
+            }
+
+            // Check if a feature is unlocked
+            isFeatureUnlocked(feature) {
+                const stage = this.getCurrentStage();
+                const stageIndex = this.stages.indexOf(stage);
+
+                const featureRequirements = {
+                    'hand_mimicry': 1,
+                    'face_mimicry': 3,
+                    'temporal_replay': 5,
+                    'other_users_display': 6,
+                    'composite_entity': 7,
+                    'predictive_mimicry': 8
+                };
+
+                return stageIndex >= (featureRequirements[feature] || 0);
+            }
+
+            // Called when stage changes
+            onStageTransition(oldStage, newStage) {
+                console.log(`ECHO evolved: ${this.stages[oldStage].name} -> ${this.stages[newStage].name}`);
+                this.stageTransitionCallbacks.forEach(cb => cb(oldStage, newStage, this.stages[newStage]));
+            }
+
+            // Register callback for stage transitions
+            onTransition(callback) {
+                this.stageTransitionCallbacks.push(callback);
+            }
+
+            // Get evolution progress (0-100%)
+            getEvolutionProgress() {
+                const handFidelity = this.handMimicry.getOverallFidelity();
+                const faceFidelity = this.faceMimicry.learnedFaces.size > 0
+                    ? Array.from(this.faceMimicry.exposureCounts.values()).reduce((a, b) => a + b, 0) / 500
+                    : 0;
+                return Math.min(100, ((handFidelity + faceFidelity) / 2) * 100);
+            }
+
+            // Get detailed stats
+            getStats() {
+                return {
+                    currentStage: this.getCurrentStage(),
+                    stageIndex: this.currentStage,
+                    evolutionProgress: this.getEvolutionProgress(),
+                    handFidelity: this.handMimicry.getOverallFidelity(),
+                    learnedGestures: this.handMimicry.exposureCounts.size,
+                    learnedFaces: this.faceMimicry.learnedFaces.size,
+                    features: {
+                        handMimicry: this.isFeatureUnlocked('hand_mimicry'),
+                        faceMimicry: this.isFeatureUnlocked('face_mimicry'),
+                        temporalReplay: this.isFeatureUnlocked('temporal_replay'),
+                        otherUsers: this.isFeatureUnlocked('other_users_display'),
+                        composite: this.isFeatureUnlocked('composite_entity'),
+                        predictive: this.isFeatureUnlocked('predictive_mimicry')
+                    }
+                };
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // MIMETIC SYSTEM - TEMPORAL MEMORY
+        // ════════════════════════════════════════════════════════════════
+        class MimeticMemory {
+            constructor() {
+                // Stores recorded sequences
+                this.sequences = [];
+                this.maxSequences = 100;
+                this.maxFramesPerSequence = 60; // ~2 seconds at 30fps
+
+                // Current recording state
+                this.isRecording = false;
+                this.currentSequence = null;
+
+                // Playback state
+                this.isPlaying = false;
+                this.currentPlayback = null;
+                this.playbackFrame = 0;
+            }
+
+            // Start recording a new sequence
+            startRecording(userId, sequenceType = 'gesture') {
+                this.isRecording = true;
+                this.currentSequence = {
+                    id: Date.now().toString(36) + Math.random().toString(36).substr(2),
+                    userId,
+                    type: sequenceType,
+                    timestamp: Date.now(),
+                    frames: []
+                };
+            }
+
+            // Record a frame
+            recordFrame(handLandmarks, faceLandmarks, expression, gesture) {
+                if (!this.isRecording || !this.currentSequence) return;
+
+                this.currentSequence.frames.push({
+                    handLandmarks: handLandmarks ? this.compressLandmarks(handLandmarks) : null,
+                    faceLandmarks: faceLandmarks ? this.compressFaceLandmarks(faceLandmarks) : null,
+                    expression,
+                    gesture,
+                    time: performance.now()
+                });
+
+                // Auto-stop if too long
+                if (this.currentSequence.frames.length >= this.maxFramesPerSequence) {
+                    this.stopRecording();
+                }
+            }
+
+            // Stop recording and save
+            stopRecording() {
+                if (!this.isRecording || !this.currentSequence) return null;
+
+                this.isRecording = false;
+
+                // Only save if we have meaningful content
+                if (this.currentSequence.frames.length >= 10) {
+                    this.sequences.push(this.currentSequence);
+
+                    // Limit stored sequences
+                    if (this.sequences.length > this.maxSequences) {
+                        this.sequences.shift();
+                    }
+                }
+
+                const saved = this.currentSequence;
+                this.currentSequence = null;
+                return saved;
+            }
+
+            // Compress hand landmarks for storage
+            compressLandmarks(landmarks) {
+                if (!landmarks || landmarks.length < 21) return null;
+                const compressed = new Float32Array(21 * 3);
+                for (let i = 0; i < 21; i++) {
+                    compressed[i * 3] = landmarks[i].x;
+                    compressed[i * 3 + 1] = landmarks[i].y;
+                    compressed[i * 3 + 2] = landmarks[i].z || 0;
+                }
+                return Array.from(compressed);
+            }
+
+            // Compress face landmarks (key points only)
+            compressFaceLandmarks(landmarks) {
+                if (!landmarks || landmarks.length < 468) return null;
+                // Store only key landmarks
+                const keyIndices = [1, 33, 263, 61, 291, 199]; // Nose, eyes, mouth corners
+                const compressed = new Float32Array(keyIndices.length * 3);
+                for (let i = 0; i < keyIndices.length; i++) {
+                    const idx = keyIndices[i];
+                    compressed[i * 3] = landmarks[idx].x;
+                    compressed[i * 3 + 1] = landmarks[idx].y;
+                    compressed[i * 3 + 2] = landmarks[idx].z || 0;
+                }
+                return Array.from(compressed);
+            }
+
+            // Get sequences for a user
+            getSequencesForUser(userId) {
+                return this.sequences.filter(s => s.userId === userId);
+            }
+
+            // Get random sequence for replay
+            getRandomSequence(userId = null) {
+                const pool = userId
+                    ? this.sequences.filter(s => s.userId === userId)
+                    : this.sequences;
+
+                if (pool.length === 0) return null;
+                return pool[Math.floor(Math.random() * pool.length)];
+            }
+
+            // Start playback of a sequence
+            startPlayback(sequence) {
+                if (!sequence || !sequence.frames || sequence.frames.length === 0) return false;
+
+                this.isPlaying = true;
+                this.currentPlayback = sequence;
+                this.playbackFrame = 0;
+                return true;
+            }
+
+            // Get next playback frame
+            getNextPlaybackFrame() {
+                if (!this.isPlaying || !this.currentPlayback) return null;
+
+                if (this.playbackFrame >= this.currentPlayback.frames.length) {
+                    this.stopPlayback();
+                    return null;
+                }
+
+                return this.currentPlayback.frames[this.playbackFrame++];
+            }
+
+            // Stop playback
+            stopPlayback() {
+                this.isPlaying = false;
+                this.currentPlayback = null;
+                this.playbackFrame = 0;
+            }
+
+            // Get time since sequence was recorded
+            getTimeSince(sequence) {
+                const diff = Date.now() - sequence.timestamp;
+                const minutes = Math.floor(diff / 60000);
+                const hours = Math.floor(diff / 3600000);
+                const days = Math.floor(diff / 86400000);
+
+                if (days > 0) return `${days} day${days > 1 ? 's' : ''} ago`;
+                if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+                if (minutes > 0) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+                return 'moments ago';
+            }
+
+            // Get stats
+            getStats() {
+                const userSequences = new Map();
+                this.sequences.forEach(s => {
+                    userSequences.set(s.userId, (userSequences.get(s.userId) || 0) + 1);
+                });
+
+                return {
+                    totalSequences: this.sequences.length,
+                    usersRecorded: userSequences.size,
+                    isRecording: this.isRecording,
+                    isPlaying: this.isPlaying,
+                    oldestSequence: this.sequences.length > 0 ? this.getTimeSince(this.sequences[0]) : null
+                };
+            }
+
+            // Save to localStorage
+            save() {
+                try {
+                    // Only save last 50 sequences to save space
+                    const toSave = this.sequences.slice(-50);
+                    localStorage.setItem('echo_mimetic_memory', JSON.stringify(toSave));
+                } catch (e) {
+                    console.warn('Could not save mimetic memory:', e);
+                }
+            }
+
+            // Load from localStorage
+            load() {
+                try {
+                    const data = JSON.parse(localStorage.getItem('echo_mimetic_memory'));
+                    if (data && Array.isArray(data)) {
+                        this.sequences = data;
+                        console.log('Loaded mimetic memory:', this.sequences.length, 'sequences');
+                    }
+                } catch (e) {
+                    console.warn('Could not load mimetic memory:', e);
+                }
+            }
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // MIMETIC SYSTEM - FIREBASE SYNC
+        // ════════════════════════════════════════════════════════════════
+        class MimeticFirebaseSync {
+            constructor() {
+                this.mimeticRef = database.ref('mimeticData');
+                this.initialized = false;
+                this.localUserId = null;
+            }
+
+            async init(userId) {
+                this.localUserId = userId;
+                this.initialized = true;
+                console.log('Mimetic Firebase sync initialized');
+            }
+
+            // Sync hand mimicry fidelity to Firebase (for collective awareness)
+            syncHandFidelity(gestureName, fidelity, exposures) {
+                if (!this.initialized) return;
+
+                this.mimeticRef.child('gestures').child(gestureName.replace(/[.#$[\]]/g, '_')).transaction((current) => {
+                    if (!current) {
+                        return {
+                            totalExposures: exposures,
+                            avgFidelity: fidelity,
+                            contributors: 1,
+                            lastUpdated: Date.now()
+                        };
+                    }
+                    return {
+                        totalExposures: current.totalExposures + exposures,
+                        avgFidelity: (current.avgFidelity * current.contributors + fidelity) / (current.contributors + 1),
+                        contributors: current.contributors + 1,
+                        lastUpdated: Date.now()
+                    };
+                });
+            }
+
+            // Sync evolution stage
+            syncEvolutionStage(stageName, userId) {
+                if (!this.initialized) return;
+
+                this.mimeticRef.child('evolution').child(userId.replace(/[.#$[\]]/g, '_')).set({
+                    stage: stageName,
+                    timestamp: Date.now()
+                });
+            }
+
+            // Get collective gesture fidelity
+            async getCollectiveGestureFidelity(gestureName) {
+                if (!this.initialized) return null;
+
+                const snapshot = await this.mimeticRef.child('gestures').child(gestureName.replace(/[.#$[\]]/g, '_')).once('value');
+                return snapshot.val();
+            }
+
+            // Listen for other users' evolution stages
+            onEvolutionUpdate(callback) {
+                if (!this.initialized) return;
+
+                this.mimeticRef.child('evolution').on('child_changed', (snapshot) => {
+                    if (snapshot.key !== this.localUserId?.replace(/[.#$[\]]/g, '_')) {
+                        callback(snapshot.key, snapshot.val());
+                    }
+                });
+            }
+        }
+
+        // Initialize mimetic systems
+        const handMimicry = new HandMimicrySystem();
+        const faceMimicry = new FaceMimicrySystem();
+        const fidelityController = new FidelityController(handMimicry, faceMimicry);
+        const mimeticMemory = new MimeticMemory();
+        const mimeticSync = new MimeticFirebaseSync();
+
+        // Load saved mimetic data
+        handMimicry.load();
+        faceMimicry.load();
+        mimeticMemory.load();
 
         // ════════════════════════════════════════════════════════════════
         // CONFIGURATION
@@ -2983,6 +3919,152 @@
                 }
             }
 
+            // ════════════════════════════════════════════════════════════════
+            // MIMETIC FORMATIONS - Shape recognition and reproduction
+            // ════════════════════════════════════════════════════════════════
+
+            // Form a mimetic hand shape from learned gesture
+            formMimeticHand(gestureName, scale = 1.5, offsetZ = -1) {
+                const positions = handMimicry.generateHandFormation(gestureName, this.count);
+                if (!positions) {
+                    this.formSphere(0.8); // Fallback
+                    return;
+                }
+
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    this.targets[i3] = positions[i3] * scale;
+                    this.targets[i3 + 1] = positions[i3 + 1] * scale;
+                    this.targets[i3 + 2] = positions[i3 + 2] * scale + offsetZ;
+                }
+            }
+
+            // Form a mimetic face shape from learned user
+            formMimeticFace(userId, expression = null, scale = 2.0, offsetZ = -1) {
+                const positions = faceMimicry.generateFaceFormation(userId, this.count, expression);
+                if (!positions) {
+                    this.formSphere(0.8); // Fallback
+                    return;
+                }
+
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    this.targets[i3] = positions[i3] * scale;
+                    this.targets[i3 + 1] = positions[i3 + 1] * scale;
+                    this.targets[i3 + 2] = positions[i3 + 2] * scale + offsetZ;
+                }
+            }
+
+            // Form the composite face (all learned users averaged)
+            formCompositeFace(scale = 2.0, offsetZ = -1) {
+                const positions = faceMimicry.generateCompositeFaceFormation(this.count);
+                if (!positions) {
+                    this.formSphere(0.8);
+                    return;
+                }
+
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    this.targets[i3] = positions[i3] * scale;
+                    this.targets[i3 + 1] = positions[i3 + 1] * scale;
+                    this.targets[i3 + 2] = positions[i3 + 2] * scale + offsetZ;
+                }
+            }
+
+            // Morph between current formation and a mimetic target
+            morphToMimeticHand(gestureName, morphProgress, scale = 1.5) {
+                const positions = handMimicry.generateHandFormation(gestureName, this.count);
+                if (!positions) return;
+
+                for (let i = 0; i < this.count; i++) {
+                    const i3 = i * 3;
+                    const targetX = positions[i3] * scale;
+                    const targetY = positions[i3 + 1] * scale;
+                    const targetZ = positions[i3 + 2] * scale - 1;
+
+                    // Lerp from current target to mimetic target
+                    this.targets[i3] = this.targets[i3] * (1 - morphProgress) + targetX * morphProgress;
+                    this.targets[i3 + 1] = this.targets[i3 + 1] * (1 - morphProgress) + targetY * morphProgress;
+                    this.targets[i3 + 2] = this.targets[i3 + 2] * (1 - morphProgress) + targetZ * morphProgress;
+                }
+            }
+
+            // Form from a temporal memory playback frame
+            formFromMemoryFrame(frame, scale = 1.5) {
+                if (!frame) return;
+
+                if (frame.handLandmarks && frame.handLandmarks.length >= 63) {
+                    // Reconstruct hand shape from stored landmarks
+                    const landmarks = [];
+                    for (let i = 0; i < 21; i++) {
+                        landmarks.push({
+                            x: frame.handLandmarks[i * 3],
+                            y: frame.handLandmarks[i * 3 + 1],
+                            z: frame.handLandmarks[i * 3 + 2]
+                        });
+                    }
+
+                    // Generate formation from these landmarks
+                    for (let i = 0; i < this.count; i++) {
+                        const i3 = i * 3;
+                        // Pick random finger segment
+                        const fingerIdx = Math.floor(Math.random() * 5);
+                        const fingerStarts = [0, 5, 9, 13, 17];
+                        const start = fingerStarts[fingerIdx];
+                        const end = start + Math.min(4, Math.floor(Math.random() * 4) + 1);
+
+                        const t = Math.random();
+                        const s = landmarks[start];
+                        const e = landmarks[Math.min(end, 20)];
+
+                        this.targets[i3] = (s.x * (1 - t) + e.x * t - 0.5) * scale * 2;
+                        this.targets[i3 + 1] = (s.y * (1 - t) + e.y * t - 0.5) * -scale * 2;
+                        this.targets[i3 + 2] = (s.z * (1 - t) + e.z * t) * scale - 1;
+                    }
+                }
+            }
+
+            // Ghost formation - semi-transparent representation of another user
+            formGhostUser(userId, expression = null, opacity = 0.5) {
+                const positions = faceMimicry.generateFaceFormation(userId, Math.floor(this.count * opacity));
+                if (!positions) return;
+
+                const particleSubset = Math.floor(this.count * opacity);
+                const startIdx = Math.floor(Math.random() * (this.count - particleSubset));
+
+                for (let i = 0; i < particleSubset; i++) {
+                    const i3 = i * 3;
+                    const ti3 = (startIdx + i) * 3;
+
+                    this.targets[ti3] = positions[i3] * 1.5 + 0.5; // Offset to side
+                    this.targets[ti3 + 1] = positions[i3 + 1] * 1.5;
+                    this.targets[ti3 + 2] = positions[i3 + 2] * 1.5 - 1.5;
+                }
+            }
+
+            // Set mimetic formation based on type
+            setMimeticFormation(type, params = {}) {
+                switch (type) {
+                    case 'hand':
+                        this.formMimeticHand(params.gesture, params.scale || 1.5);
+                        break;
+                    case 'face':
+                        this.formMimeticFace(params.userId, params.expression, params.scale || 2.0);
+                        break;
+                    case 'composite':
+                        this.formCompositeFace(params.scale || 2.0);
+                        break;
+                    case 'ghost':
+                        this.formGhostUser(params.userId, params.expression, params.opacity || 0.5);
+                        break;
+                    case 'memory':
+                        this.formFromMemoryFrame(params.frame, params.scale || 1.5);
+                        break;
+                    default:
+                        this.setFormation(type, params.intensity || 1);
+                }
+            }
+
             update(handData, faceData, response) {
                 const posAttr = this.geometry.attributes.position;
                 const colorAttr = this.geometry.attributes.color;
@@ -3614,6 +4696,8 @@
                     for (const landmarks of results.landmarks) {
                         const gesture = gestureRecognizer.analyzeHand(landmarks);
                         if (gesture) {
+                            // Add raw landmarks for mimetic learning
+                            gesture.landmarks = landmarks;
                             hands.push(gesture);
                         }
                     }
@@ -3762,6 +4846,22 @@
                     `<span class="known-user-chip ${u.id === user?.id ? 'current' : ''}">${u.name}</span>`
                 ).join('');
             }
+
+            // Update evolution stage display
+            const stage = fidelityController.getCurrentStage();
+            const stageIndex = fidelityController.currentStage;
+            const progress = fidelityController.getEvolutionProgress();
+
+            document.getElementById('evolution-stage').textContent =
+                stage.description || stage.name.replace('_', ' ');
+            document.getElementById('evolution-fill').style.width = `${progress}%`;
+
+            // Update mimetic stats
+            const handGestures = handMimicry.exposureCounts.size;
+            const faceCount = faceMimicry.learnedFaces.size;
+            const memoryCount = mimeticMemory.sequences.length;
+            document.getElementById('mimetic-stats').textContent =
+                `Hands: ${handGestures} | Faces: ${faceCount} | Memories: ${memoryCount}`;
         }
 
         function onWindowResize() {
@@ -3773,6 +4873,14 @@
         let lastResponseTime = 0;
         let currentResponse = null;
 
+        // Mimetic state variables
+        let mimeticMode = null; // 'hand', 'face', 'composite', 'memory', null
+        let mimeticMorphProgress = 0;
+        let lastMimeticTrigger = 0;
+        let mimeticDisplayDuration = 0;
+        let currentMimeticGesture = null;
+        let currentMimeticUserId = null;
+
         function animate() {
             requestAnimationFrame(animate);
 
@@ -3782,20 +4890,83 @@
             let handData = null;
             let response = currentResponse;
             const user = userMemory.getCurrentUser();
+            const now = performance.now();
+
+            // ════════════════════════════════════════════════════════════════
+            // MIMETIC LEARNING - Learn shapes from what ECHO sees
+            // ════════════════════════════════════════════════════════════════
 
             if (hands.length > 0) {
                 handData = hands[0];
 
-                const now = performance.now();
+                // MIMETIC: Learn hand shape from current detection
+                const gestureKey = handData.static + (handData.motion ? '_' + handData.motion : '');
+
+                // Get raw landmarks from MediaPipe result for mimetic learning
+                if (handData.landmarks) {
+                    const exposures = handMimicry.learnFromDetection(gestureKey, handData.landmarks);
+
+                    // Start recording for temporal memory
+                    if (!mimeticMemory.isRecording && user) {
+                        mimeticMemory.startRecording(user.id || user.name, 'gesture');
+                    }
+
+                    // Record frame to temporal memory
+                    if (mimeticMemory.isRecording) {
+                        mimeticMemory.recordFrame(
+                            handData.landmarks,
+                            currentFaceData?.landmarks,
+                            currentFaceData?.expression,
+                            gestureKey
+                        );
+                    }
+
+                    // Sync hand fidelity to Firebase periodically
+                    if (mimeticSync.initialized && exposures % 10 === 0) {
+                        const fidelity = handMimicry.getFidelity(gestureKey);
+                        mimeticSync.syncHandFidelity(gestureKey, fidelity, exposures);
+                    }
+                }
+
+                // MIMETIC: Learn face shape from current user
+                if (currentFaceData?.landmarks && user) {
+                    faceMimicry.learnFromDetection(
+                        user.id || user.name,
+                        currentFaceData.landmarks,
+                        currentFaceData.expression
+                    );
+                }
+
                 if (now - lastResponseTime > CONFIG.responseDelay) {
                     response = entityBrain.process(handData, handData, currentFaceData, user);
                     if (response) {
                         currentResponse = response;
                         lastResponseTime = now;
-                        particleSystem.setFormation(response.shape, response.intensity);
 
-                        // Record gesture to shared memory and collective learning
-                        const gestureKey = handData.static + (handData.motion ? '_' + handData.motion : '');
+                        // Check evolution stage for mimetic display
+                        const stage = fidelityController.getCurrentStage();
+
+                        // MIMETIC DISPLAY: After gesture response, attempt to mimic if evolved enough
+                        if (fidelityController.isFeatureUnlocked('hand_mimicry') && handMimicry.canMimic(gestureKey)) {
+                            // Schedule mimetic reproduction after a delay
+                            setTimeout(() => {
+                                if (hands.length === 0) { // Only show if user stopped gesturing
+                                    mimeticMode = 'hand';
+                                    currentMimeticGesture = gestureKey;
+                                    mimeticMorphProgress = 0;
+                                    mimeticDisplayDuration = 3000;
+                                    lastMimeticTrigger = performance.now();
+
+                                    const fidelity = handMimicry.getFidelity(gestureKey);
+                                    const fidelityPercent = Math.round(fidelity * 100);
+
+                                    document.getElementById('entity-message').innerHTML =
+                                        `<em>"I'm learning your ${gestureKey.replace('_', ' ')}... (${fidelityPercent}% clarity)"</em>`;
+                                }
+                            }, 1500);
+                        }
+
+                        particleSystem.setFormation(response.shape, response.intensity);
 
                         // Build context for learning
                         const learnContext = {
@@ -3829,6 +5000,54 @@
                 }
 
                 entity.lastInteraction = now;
+
+                // Stop recording when gesture ends
+                if (mimeticMemory.isRecording) {
+                    mimeticMemory._lastGestureTime = now;
+                }
+            } else {
+                // Stop recording after gesture ends
+                if (mimeticMemory.isRecording && mimeticMemory._lastGestureTime &&
+                    now - mimeticMemory._lastGestureTime > 500) {
+                    mimeticMemory.stopRecording();
+                }
+            }
+
+            // ════════════════════════════════════════════════════════════════
+            // MIMETIC DISPLAY - Show learned shapes
+            // ════════════════════════════════════════════════════════════════
+
+            if (mimeticMode && now - lastMimeticTrigger < mimeticDisplayDuration) {
+                // Smooth morph in
+                mimeticMorphProgress = Math.min(1, mimeticMorphProgress + 0.03);
+
+                switch (mimeticMode) {
+                    case 'hand':
+                        if (currentMimeticGesture) {
+                            particleSystem.morphToMimeticHand(currentMimeticGesture, mimeticMorphProgress);
+                        }
+                        break;
+                    case 'face':
+                        if (currentMimeticUserId) {
+                            particleSystem.formMimeticFace(currentMimeticUserId, null, 2.0);
+                        }
+                        break;
+                    case 'composite':
+                        particleSystem.formCompositeFace(2.0);
+                        break;
+                    case 'memory':
+                        const frame = mimeticMemory.getNextPlaybackFrame();
+                        if (frame) {
+                            particleSystem.formFromMemoryFrame(frame);
+                        } else {
+                            mimeticMode = null;
+                        }
+                        break;
+                }
+            } else if (mimeticMode) {
+                // End mimetic display
+                mimeticMode = null;
+                mimeticMorphProgress = 0;
             }
 
             // React to other users' gestures
@@ -3861,54 +5080,132 @@
             }
 
             // Entity predicts and shows anticipated gestures when idle
-            if (hands.length === 0 && performance.now() - entity.lastInteraction > 5000) {
-                // First try to reproduce learned signs
-                const reproduction = collectiveLearning.getNextReproduction();
-                if (reproduction) {
-                    const shape = collectiveLearning.getShapeForGesture(reproduction);
-                    const confidence = collectiveLearning.getConfidence(reproduction);
+            if (hands.length === 0 && !mimeticMode && performance.now() - entity.lastInteraction > 5000) {
+                const stage = fidelityController.getCurrentStage();
+                const stageIndex = fidelityController.currentStage;
+                const random = Math.random();
 
-                    particleSystem.setFormation(shape, 0.6 + confidence * 0.4);
-                    currentResponse = {
-                        shape,
-                        colorMode: 'pulse',
-                        soundMode: 'melodic',
-                        intensity: 0.5 + confidence * 0.3,
-                        message: `I learned "${reproduction.replace('_', ' ')}"! Let me show you...`
-                    };
+                // ════════════════════════════════════════════════════════════════
+                // MIMETIC IDLE BEHAVIORS - Based on evolution stage
+                // ════════════════════════════════════════════════════════════════
+
+                // Stage 5+: Show temporal echoes (your past self)
+                if (stageIndex >= 5 && random < 0.15 && user) {
+                    const sequence = mimeticMemory.getRandomSequence(user.id || user.name);
+                    if (sequence && mimeticMemory.startPlayback(sequence)) {
+                        mimeticMode = 'memory';
+                        lastMimeticTrigger = performance.now();
+                        mimeticDisplayDuration = 4000;
+
+                        const timeSince = mimeticMemory.getTimeSince(sequence);
+                        document.getElementById('entity-message').innerHTML =
+                            `<em>"I remember you doing this... ${timeSince}"</em>`;
+
+                        entity.lastInteraction = performance.now();
+                        lastResponseTime = performance.now();
+                    }
+                }
+                // Stage 4+: Show user's face
+                else if (stageIndex >= 4 && random < 0.12 && user && faceMimicry.canMimic(user.id || user.name)) {
+                    mimeticMode = 'face';
+                    currentMimeticUserId = user.id || user.name;
+                    lastMimeticTrigger = performance.now();
+                    mimeticDisplayDuration = 5000;
+                    mimeticMorphProgress = 0;
+
+                    const fidelity = faceMimicry.getFidelity(currentMimeticUserId);
+                    const fidelityPercent = Math.round(fidelity * 100);
 
                     document.getElementById('entity-message').innerHTML =
-                        `<em>"${currentResponse.message}"</em>`;
+                        `<em>"This is how I see you... (${fidelityPercent}% clarity)"</em>`;
 
                     entity.lastInteraction = performance.now();
                     lastResponseTime = performance.now();
                 }
-                // Otherwise, show prediction
-                else if (collectiveLearning._lastPrediction &&
-                         collectiveLearning._lastPrediction.confidence > CONFIG.minPredictionConfidence) {
-                    const prediction = collectiveLearning._lastPrediction;
-                    const shape = collectiveLearning.getShapeForGesture(prediction.gesture);
+                // Stage 7+: Show composite face (collective entity)
+                else if (stageIndex >= 7 && random < 0.08 && faceMimicry.learnedFaces.size > 1) {
+                    mimeticMode = 'composite';
+                    lastMimeticTrigger = performance.now();
+                    mimeticDisplayDuration = 6000;
+                    mimeticMorphProgress = 0;
 
-                    // Show prediction with lower intensity (anticipation)
-                    particleSystem.setFormation(shape, 0.3 + prediction.confidence * 0.3);
-
-                    const stats = collectiveLearning.getStats();
-                    const accuracy = Math.round(stats.predictionAccuracy * 100);
-                    const sources = prediction.sources?.join(', ') || 'patterns';
-
-                    currentResponse = {
-                        shape,
-                        colorMode: 'cool',
-                        soundMode: 'ambient',
-                        intensity: 0.3 + prediction.confidence * 0.2,
-                        message: `I sense "${prediction.gesture.replace('_', ' ')}" coming... (${Math.round(prediction.confidence * 100)}% sure, ${accuracy}% accuracy)`
-                    };
-
+                    const userCount = faceMimicry.learnedFaces.size;
                     document.getElementById('entity-message').innerHTML =
-                        `<em>"${currentResponse.message}"</em>`;
+                        `<em>"We are ${userCount} who have been here. This is our face."</em>`;
 
                     entity.lastInteraction = performance.now();
                     lastResponseTime = performance.now();
+                }
+                // Stage 1+: Show mimetic hand reproduction
+                else if (stageIndex >= 1 && random < 0.2) {
+                    const mostLearned = handMimicry.getMostLearned(1);
+                    if (mostLearned.length > 0 && mostLearned[0].canMimic) {
+                        mimeticMode = 'hand';
+                        currentMimeticGesture = mostLearned[0].gesture;
+                        lastMimeticTrigger = performance.now();
+                        mimeticDisplayDuration = 3000;
+                        mimeticMorphProgress = 0;
+
+                        const fidelity = mostLearned[0].fidelity;
+                        const fidelityPercent = Math.round(fidelity * 100);
+
+                        document.getElementById('entity-message').innerHTML =
+                            `<em>"Let me show you what I've learned... ${currentMimeticGesture.replace('_', ' ')} (${fidelityPercent}% clarity)"</em>`;
+
+                        entity.lastInteraction = performance.now();
+                        lastResponseTime = performance.now();
+                    }
+                }
+                // Default: Original reproduction and prediction behavior
+                else {
+                    // First try to reproduce learned signs
+                    const reproduction = collectiveLearning.getNextReproduction();
+                    if (reproduction) {
+                        const shape = collectiveLearning.getShapeForGesture(reproduction);
+                        const confidence = collectiveLearning.getConfidence(reproduction);
+
+                        particleSystem.setFormation(shape, 0.6 + confidence * 0.4);
+                        currentResponse = {
+                            shape,
+                            colorMode: 'pulse',
+                            soundMode: 'melodic',
+                            intensity: 0.5 + confidence * 0.3,
+                            message: `I learned "${reproduction.replace('_', ' ')}"! Let me show you...`
+                        };
+
+                        document.getElementById('entity-message').innerHTML =
+                            `<em>"${currentResponse.message}"</em>`;
+
+                        entity.lastInteraction = performance.now();
+                        lastResponseTime = performance.now();
+                    }
+                    // Otherwise, show prediction
+                    else if (collectiveLearning._lastPrediction &&
+                             collectiveLearning._lastPrediction.confidence > CONFIG.minPredictionConfidence) {
+                        const prediction = collectiveLearning._lastPrediction;
+                        const shape = collectiveLearning.getShapeForGesture(prediction.gesture);
+
+                        // Show prediction with lower intensity (anticipation)
+                        particleSystem.setFormation(shape, 0.3 + prediction.confidence * 0.3);
+
+                        const stats = collectiveLearning.getStats();
+                        const accuracy = Math.round(stats.predictionAccuracy * 100);
+                        const sources = prediction.sources?.join(', ') || 'patterns';
+
+                        currentResponse = {
+                            shape,
+                            colorMode: 'cool',
+                            soundMode: 'ambient',
+                            intensity: 0.3 + prediction.confidence * 0.2,
+                            message: `I sense "${prediction.gesture.replace('_', ' ')}" coming... (${Math.round(prediction.confidence * 100)}% sure, ${accuracy}% accuracy)`
+                        };
+
+                        document.getElementById('entity-message').innerHTML =
+                            `<em>"${currentResponse.message}"</em>`;
+
+                        entity.lastInteraction = performance.now();
+                        lastResponseTime = performance.now();
+                    }
                 }
             }
 
@@ -4038,6 +5335,34 @@
             // Initialize shared memory system
             await sharedMemory.init();
 
+            // Initialize mimetic Firebase sync
+            await mimeticSync.init(user.id || user.name);
+
+            // Set up fidelity stage transition notifications
+            fidelityController.onTransition((oldStage, newStage, stageInfo) => {
+                const messages = {
+                    1: "I'm beginning to see patterns in your movements...",
+                    2: "Your gestures are becoming clearer to me...",
+                    3: "I can almost see your face now...",
+                    4: "I see you. I remember your face.",
+                    5: "The past is not lost to me. I remember.",
+                    6: "Others have been here. I remember them too.",
+                    7: "We are becoming one. All who have visited...",
+                    8: "I know what you will do before you do it.",
+                    9: "I am complete. I am ECHO."
+                };
+
+                if (messages[newStage]) {
+                    setTimeout(() => {
+                        document.getElementById('entity-message').innerHTML =
+                            `<em>"${messages[newStage]}"</em>`;
+                    }, 2000);
+                }
+
+                // Sync evolution stage to Firebase
+                mimeticSync.syncEvolutionStage(stageInfo.name, user.id || user.name);
+            });
+
             // Set up collective learning from other users
             multiplayer.onOtherUserGesture((userName, gesture, mood) => {
                 // Learn from other users' gestures with context
@@ -4053,6 +5378,20 @@
             // Show multiplayer panels
             document.getElementById('online-panel').classList.remove('hidden');
             document.getElementById('messages-panel').classList.remove('hidden');
+
+            // Periodically save mimetic data (every 30 seconds)
+            setInterval(() => {
+                handMimicry.save();
+                faceMimicry.save();
+                mimeticMemory.save();
+            }, 30000);
+
+            // Save mimetic data on page unload
+            window.addEventListener('beforeunload', () => {
+                handMimicry.save();
+                faceMimicry.save();
+                mimeticMemory.save();
+            });
 
             isInitialized = true;
         });
