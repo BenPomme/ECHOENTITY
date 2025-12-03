@@ -2014,8 +2014,18 @@
                 try {
                     const data = JSON.parse(localStorage.getItem('echo_face_mimicry'));
                     if (data) {
+                        const expectedLandmarkCount = 468 * 3; // New format requires all 468 landmarks
+                        let validFacesLoaded = 0;
+
                         for (const userId in data.faces) {
                             const faceData = data.faces[userId];
+
+                            // Validate landmark count - skip incompatible old data
+                            if (!faceData.landmarks || faceData.landmarks.length !== expectedLandmarkCount) {
+                                console.log(`Skipping incompatible face data for ${userId} (${faceData.landmarks?.length || 0} landmarks, expected ${expectedLandmarkCount})`);
+                                continue;
+                            }
+
                             const face = {
                                 landmarks: new Float32Array(faceData.landmarks),
                                 expressions: new Map(),
@@ -2023,23 +2033,38 @@
                                 lastSeen: faceData.lastSeen
                             };
                             for (const exprName in faceData.expressions) {
-                                face.expressions.set(exprName, {
-                                    landmarks: new Float32Array(faceData.expressions[exprName].landmarks),
-                                    count: faceData.expressions[exprName].count
-                                });
+                                // Also validate expression landmarks
+                                if (faceData.expressions[exprName].landmarks?.length === expectedLandmarkCount) {
+                                    face.expressions.set(exprName, {
+                                        landmarks: new Float32Array(faceData.expressions[exprName].landmarks),
+                                        count: faceData.expressions[exprName].count
+                                    });
+                                }
                             }
                             this.learnedFaces.set(userId, face);
+                            validFacesLoaded++;
                         }
                         for (const userId in data.exposures) {
-                            this.exposureCounts.set(userId, data.exposures[userId]);
+                            // Only load exposure counts for faces we actually loaded
+                            if (this.learnedFaces.has(userId)) {
+                                this.exposureCounts.set(userId, data.exposures[userId]);
+                            }
                         }
-                        if (data.composite) {
+                        if (data.composite && data.composite.length === expectedLandmarkCount) {
                             this.compositeFace = new Float32Array(data.composite);
                         }
-                        console.log('Loaded face mimicry data:', this.learnedFaces.size, 'faces');
+
+                        if (validFacesLoaded > 0) {
+                            console.log('Loaded face mimicry data:', validFacesLoaded, 'faces');
+                        } else if (Object.keys(data.faces || {}).length > 0) {
+                            console.log('Cleared incompatible face data - will re-learn from fresh detections');
+                            localStorage.removeItem('echo_face_mimicry');
+                        }
                     }
                 } catch (e) {
                     console.warn('Could not load face mimicry data:', e);
+                    // Clear potentially corrupted data
+                    localStorage.removeItem('echo_face_mimicry');
                 }
             }
         }
